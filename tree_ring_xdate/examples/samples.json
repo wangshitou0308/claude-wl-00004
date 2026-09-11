@@ -1,0 +1,2992 @@
+{
+  "samples": [
+    {
+      "sample_id": "SITE_A01",
+      "unit": "mm",
+      "start_year": 1901,
+      "rings": [
+        {
+          "year": null,
+          "width": 1.741,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.769,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.697,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.577,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.173,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.579,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.511,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.573,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.553,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.987,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.446,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.606,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.469,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.98,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.293,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.218,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.257,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.281,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.003,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.678,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.416,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.455,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.473,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.373,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.432,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.35,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.569,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.545,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.555,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.402,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.329,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.191,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.104,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.421,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.474,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.33,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.167,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.453,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.232,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.116,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.042,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.37,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.529,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.572,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.483,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.633,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.876,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.994,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.218,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.204,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.366,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.47,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.315,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.343,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.703,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.27,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.432,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.481,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.173,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.274,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.354,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.383,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.552,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.246,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.608,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.464,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.98,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.239,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.256,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.885,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.85,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.914,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.198,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.333,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.287,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.742,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.856,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.711,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.708,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.713,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.017,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.224,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.424,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.254,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.445,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.235,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.436,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.361,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.106,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.057,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.252,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.131,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.279,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.374,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.399,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.262,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.27,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.451,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.344,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.781,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.286,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.31,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.144,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.295,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.252,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.413,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.223,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.589,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.376,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.362,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.926,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.878,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.249,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.309,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.359,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.185,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.206,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.101,
+          "missing": false
+        }
+      ]
+    },
+    {
+      "sample_id": "SITE_A02",
+      "unit": "mm",
+      "start_year": 1905,
+      "rings": [
+        {
+          "year": null,
+          "width": 1.844,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.436,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.344,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.551,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.798,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.658,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.469,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.388,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.402,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.638,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.934,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.015,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.038,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.396,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.528,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.582,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.175,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.069,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.278,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.22,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.107,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.966,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.452,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.285,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.217,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.863,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.042,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.701,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.628,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.282,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.962,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.792,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.832,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.116,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.787,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.644,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.572,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.085,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.086,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.166,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.04,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.335,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.302,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.322,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.772,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.596,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.934,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.059,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.725,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.999,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.204,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.848,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.104,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.883,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.724,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.006,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.613,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.892,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.094,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.965,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.141,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.726,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.34,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.821,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.523,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.06,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.183,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.347,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.593,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.753,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.866,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.052,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.095,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.916,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.974,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.863,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.2,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.659,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.97,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.799,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.844,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.574,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.943,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.755,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.376,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.351,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.492,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.42,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.585,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.793,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.005,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.544,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.494,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.672,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.793,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.987,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.352,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.394,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.381,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.505,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.437,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.705,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.583,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.922,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.825,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.563,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.168,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.101,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.351,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.463,
+          "missing": false
+        }
+      ]
+    },
+    {
+      "sample_id": "SITE_B01",
+      "unit": "mm",
+      "start_year": 1920,
+      "rings": [
+        {
+          "year": null,
+          "width": 1.927,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.896,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.724,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.818,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.717,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.685,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.5,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.803,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.882,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.677,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.704,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.68,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.341,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.347,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.645,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.661,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.488,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.58,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.642,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.323,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.196,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.31,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.621,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.696,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.829,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.596,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.953,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.036,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.12,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.333,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.367,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.478,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.874,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.517,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.902,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.802,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.564,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.755,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.711,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.372,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.635,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.509,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.739,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.846,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.552,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.873,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.599,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.277,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.519,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.365,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.024,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.214,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.213,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.261,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.621,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.597,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.897,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.033,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.911,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.836,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.724,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.13,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.389,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.611,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.503,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.769,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.577,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.575,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.635,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.43,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.332,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.416,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.377,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.442,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.877,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.635,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.494,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.415,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.671,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.554,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 2.072,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.378,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.379,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.244,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.547,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.486,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.636,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.518,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.97,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.612,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.664,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.14,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.14,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.607,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.525,
+          "missing": false
+        }
+      ]
+    },
+    {
+      "sample_id": "SITE_B02",
+      "unit": "mm",
+      "start_year": 1931,
+      "rings": [
+        {
+          "year": null,
+          "width": 1.479,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.114,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.197,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.498,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.488,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.238,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.267,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.416,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.295,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.078,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.247,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.386,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.579,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.573,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.338,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.821,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.804,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.029,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.192,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.103,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.489,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.448,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.265,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.625,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.675,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.309,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.633,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.449,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.299,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.23,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.372,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.381,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.496,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.363,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.593,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.387,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.979,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.299,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.273,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.75,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.896,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.0,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.03,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.412,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.317,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.848,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.91,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.676,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.691,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.63,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.922,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.3,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.444,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.423,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.533,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.206,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.374,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.497,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.19,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.972,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.144,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.151,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.25,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.464,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.402,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.351,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.339,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.528,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.345,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.761,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.23,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.0,
+          "missing": true
+        },
+        {
+          "year": null,
+          "width": 1.034,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.3,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.152,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.39,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.28,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.496,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.438,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.287,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.942,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.884,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.348,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.267,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.347,
+          "missing": false
+        }
+      ]
+    },
+    {
+      "sample_id": "SITE_C01",
+      "unit": "mm",
+      "start_year": 1940,
+      "rings": [
+        {
+          "year": null,
+          "width": 0.638,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.864,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.878,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.001,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.012,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.96,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.131,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.585,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.675,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.775,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.8,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.968,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.946,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.867,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.973,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.161,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.881,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.043,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.977,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.834,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.95,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.95,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.918,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.993,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.948,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.079,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.932,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.713,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.835,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.876,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.536,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.639,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.638,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.803,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.964,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.909,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.58,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.629,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.513,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.502,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.436,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.706,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.972,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.038,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.89,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.032,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.939,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.025,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.132,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.888,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.688,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.784,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.846,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.981,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.99,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.978,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.948,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.84,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.063,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.186,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.284,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.847,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.234,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.783,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.907,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.939,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.034,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.967,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 1.166,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.954,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.951,
+          "missing": false
+        },
+        {
+          "year": null,
+          "width": 0.78,
+          "missing": false
+        }
+      ]
+    },
+    {
+      "sample_id": "SITE_C02",
+      "unit": "mm",
+      "start_year": null,
+      "rings": [
+        {
+          "year": 1950,
+          "width": 0.726,
+          "missing": false
+        },
+        {
+          "year": 1951,
+          "width": 0.919,
+          "missing": false
+        },
+        {
+          "year": 1952,
+          "width": 1.082,
+          "missing": false
+        },
+        {
+          "year": 1953,
+          "width": 0.853,
+          "missing": false
+        },
+        {
+          "year": 1954,
+          "width": 1.006,
+          "missing": false
+        },
+        {
+          "year": 1955,
+          "width": 1.057,
+          "missing": false
+        },
+        {
+          "year": 1956,
+          "width": 0.867,
+          "missing": false
+        },
+        {
+          "year": 1957,
+          "width": 1.016,
+          "missing": false
+        },
+        {
+          "year": 1958,
+          "width": 0.824,
+          "missing": false
+        },
+        {
+          "year": 1959,
+          "width": 0.847,
+          "missing": false
+        },
+        {
+          "year": 1960,
+          "width": 0.836,
+          "missing": false
+        },
+        {
+          "year": 1961,
+          "width": 0.803,
+          "missing": false
+        },
+        {
+          "year": 1962,
+          "width": 0.926,
+          "missing": false
+        },
+        {
+          "year": 1963,
+          "width": 0.968,
+          "missing": false
+        },
+        {
+          "year": 1964,
+          "width": 0.895,
+          "missing": false
+        },
+        {
+          "year": 1965,
+          "width": 1.047,
+          "missing": false
+        },
+        {
+          "year": 1966,
+          "width": 0.899,
+          "missing": false
+        },
+        {
+          "year": 1967,
+          "width": 0.648,
+          "missing": false
+        },
+        {
+          "year": 1968,
+          "width": 0.82,
+          "missing": false
+        },
+        {
+          "year": 1969,
+          "width": 0.728,
+          "missing": false
+        },
+        {
+          "year": 1970,
+          "width": 0.49,
+          "missing": false
+        },
+        {
+          "year": 1971,
+          "width": 0.612,
+          "missing": false
+        },
+        {
+          "year": 1972,
+          "width": 0.64,
+          "missing": false
+        },
+        {
+          "year": 1973,
+          "width": 0.666,
+          "missing": false
+        },
+        {
+          "year": 1974,
+          "width": 0.877,
+          "missing": false
+        },
+        {
+          "year": 1975,
+          "width": 0.919,
+          "missing": false
+        },
+        {
+          "year": 1976,
+          "width": 0.456,
+          "missing": false
+        },
+        {
+          "year": 1977,
+          "width": 0.61,
+          "missing": false
+        },
+        {
+          "year": 1978,
+          "width": 0.469,
+          "missing": false
+        },
+        {
+          "year": 1979,
+          "width": 0.44,
+          "missing": false
+        },
+        {
+          "year": 1980,
+          "width": 0.427,
+          "missing": false
+        },
+        {
+          "year": 1981,
+          "width": 0.604,
+          "missing": false
+        },
+        {
+          "year": 1982,
+          "width": 0.812,
+          "missing": false
+        },
+        {
+          "year": 1983,
+          "width": 0.924,
+          "missing": false
+        },
+        {
+          "year": 1984,
+          "width": 0.736,
+          "missing": false
+        },
+        {
+          "year": 1985,
+          "width": 0.999,
+          "missing": false
+        },
+        {
+          "year": 1986,
+          "width": 0.771,
+          "missing": false
+        },
+        {
+          "year": 1987,
+          "width": 0.93,
+          "missing": false
+        },
+        {
+          "year": 1988,
+          "width": 0.886,
+          "missing": false
+        },
+        {
+          "year": 1989,
+          "width": 0.751,
+          "missing": false
+        },
+        {
+          "year": 1990,
+          "width": 0.72,
+          "missing": false
+        },
+        {
+          "year": 1991,
+          "width": 0.701,
+          "missing": false
+        },
+        {
+          "year": 1992,
+          "width": 0.779,
+          "missing": false
+        },
+        {
+          "year": 1993,
+          "width": 0.818,
+          "missing": false
+        },
+        {
+          "year": 1994,
+          "width": 0.972,
+          "missing": false
+        },
+        {
+          "year": 1995,
+          "width": 0.919,
+          "missing": false
+        },
+        {
+          "year": 1996,
+          "width": 0.791,
+          "missing": false
+        },
+        {
+          "year": 1997,
+          "width": 0.83,
+          "missing": false
+        },
+        {
+          "year": 1998,
+          "width": 0.95,
+          "missing": false
+        },
+        {
+          "year": 1999,
+          "width": 0.902,
+          "missing": false
+        },
+        {
+          "year": 2000,
+          "width": 1.165,
+          "missing": false
+        },
+        {
+          "year": 2001,
+          "width": 0.754,
+          "missing": false
+        },
+        {
+          "year": 2002,
+          "width": 0.212,
+          "missing": false
+        },
+        {
+          "year": 2003,
+          "width": 0.731,
+          "missing": false
+        },
+        {
+          "year": 2004,
+          "width": 0.877,
+          "missing": false
+        },
+        {
+          "year": 2005,
+          "width": 0.774,
+          "missing": false
+        },
+        {
+          "year": 2006,
+          "width": 0.902,
+          "missing": false
+        },
+        {
+          "year": 2007,
+          "width": 0.875,
+          "missing": false
+        },
+        {
+          "year": 2008,
+          "width": 1.076,
+          "missing": false
+        },
+        {
+          "year": 2009,
+          "width": 0.94,
+          "missing": false
+        }
+      ]
+    },
+    {
+      "sample_id": "UNKNOWN_01",
+      "unit": "mm",
+      "rings": [
+        {
+          "width": 1.259,
+          "missing": false
+        },
+        {
+          "width": 1.676,
+          "missing": false
+        },
+        {
+          "width": 1.731,
+          "missing": false
+        },
+        {
+          "width": 1.876,
+          "missing": false
+        },
+        {
+          "width": 2.277,
+          "missing": false
+        },
+        {
+          "width": 1.942,
+          "missing": false
+        },
+        {
+          "width": 2.128,
+          "missing": false
+        },
+        {
+          "width": 2.431,
+          "missing": false
+        },
+        {
+          "width": 1.833,
+          "missing": false
+        },
+        {
+          "width": 2.161,
+          "missing": false
+        },
+        {
+          "width": 2.003,
+          "missing": false
+        },
+        {
+          "width": 1.688,
+          "missing": false
+        },
+        {
+          "width": 1.948,
+          "missing": false
+        },
+        {
+          "width": 1.813,
+          "missing": false
+        },
+        {
+          "width": 2.009,
+          "missing": false
+        },
+        {
+          "width": 2.247,
+          "missing": false
+        },
+        {
+          "width": 2.003,
+          "missing": false
+        },
+        {
+          "width": 2.372,
+          "missing": false
+        },
+        {
+          "width": 2.044,
+          "missing": false
+        },
+        {
+          "width": 1.379,
+          "missing": false
+        },
+        {
+          "width": 1.85,
+          "missing": false
+        },
+        {
+          "width": 1.741,
+          "missing": false
+        },
+        {
+          "width": 1.151,
+          "missing": false
+        },
+        {
+          "width": 1.3,
+          "missing": false
+        },
+        {
+          "width": 1.35,
+          "missing": false
+        },
+        {
+          "width": 1.636,
+          "missing": false
+        },
+        {
+          "width": 1.857,
+          "missing": false
+        },
+        {
+          "width": 1.869,
+          "missing": false
+        },
+        {
+          "width": 1.181,
+          "missing": false
+        },
+        {
+          "width": 1.124,
+          "missing": false
+        },
+        {
+          "width": 0.959,
+          "missing": false
+        },
+        {
+          "width": 1.004,
+          "missing": false
+        },
+        {
+          "width": 0.926,
+          "missing": false
+        },
+        {
+          "width": 1.406,
+          "missing": false
+        },
+        {
+          "width": 1.868,
+          "missing": false
+        },
+        {
+          "width": 2.168,
+          "missing": false
+        },
+        {
+          "width": 1.964,
+          "missing": false
+        },
+        {
+          "width": 2.07,
+          "missing": false
+        },
+        {
+          "width": 1.921,
+          "missing": false
+        },
+        {
+          "width": 2.031,
+          "missing": false
+        },
+        {
+          "width": 2.168,
+          "missing": false
+        },
+        {
+          "width": 1.798,
+          "missing": false
+        },
+        {
+          "width": 1.541,
+          "missing": false
+        },
+        {
+          "width": 1.569,
+          "missing": false
+        },
+        {
+          "width": 1.632,
+          "missing": false
+        },
+        {
+          "width": 1.879,
+          "missing": false
+        },
+        {
+          "width": 2.003,
+          "missing": false
+        },
+        {
+          "width": 2.123,
+          "missing": false
+        },
+        {
+          "width": 1.696,
+          "missing": false
+        },
+        {
+          "width": 1.776,
+          "missing": false
+        },
+        {
+          "width": 2.053,
+          "missing": false
+        },
+        {
+          "width": 1.972,
+          "missing": false
+        },
+        {
+          "width": 2.483,
+          "missing": false
+        },
+        {
+          "width": 1.607,
+          "missing": false
+        },
+        {
+          "width": 0.416,
+          "missing": false
+        },
+        {
+          "width": 1.496,
+          "missing": false
+        },
+        {
+          "width": 1.993,
+          "missing": false
+        },
+        {
+          "width": 1.861,
+          "missing": false
+        },
+        {
+          "width": 1.925,
+          "missing": false
+        },
+        {
+          "width": 1.693,
+          "missing": false
+        }
+      ]
+    }
+  ]
+}
