@@ -206,6 +206,108 @@ class TestIngestion(ServerTestBase):
         st, s, _ = self.request("/api/series/SOLO")
         self.assertEqual(s["raw_payload"], pretty)
 
+    def test_json_nested_same_named_key_cannot_shadow_samples(self):
+        # A nested "samples" (here inside metadata) placed BEFORE the outer
+        # samples array must not be mistaken for the real sample list.
+        payload = (
+            '{\n'
+            '  "metadata": {\n'
+            '    "samples": [\n'
+            '      {"sample_id": "DECOY", "unit": "cm", "widths": [9.9]}\n'
+            '    ],\n'
+            '    "note": "nested same-named key"\n'
+            '  },\n'
+            '  "samples" : [\n'
+            '    {\n'
+            '      "sample_id": "REAL01",\n'
+            '      "unit": "mm",\n'
+            '      "start_year": 2000,\n'
+            '      "rings": [ {"width": 1.1},\n'
+            '                 {"width": 0, "missing": true},\n'
+            '                 {"width": 0.8} ]\n'
+            '    }\n'
+            '  ]\n'
+            '}')
+        st, body, _ = self.request("/api/series", "POST", raw=payload,
+                                   ctype="application/json")
+        self.assertEqual(st, 201, body)
+        self.assertEqual([s["sample_id"] for s in body["saved"]],
+                         ["REAL01"])
+        st, lst, _ = self.request("/api/series")
+        self.assertEqual({s["sample_id"] for s in lst["series"]},
+                         {"REAL01"})
+        st, s, _ = self.request("/api/series/REAL01")
+        raw = s["raw_payload"]
+        # audit text is the real sample's exact source fragment
+        self.assertIn("REAL01", raw)
+        self.assertNotIn("DECOY", raw)
+        self.assertIn(raw, payload)
+        self.assertEqual([r["width"] for r in s["rings"]],
+                         [1.1, 0.0, 0.8])
+
+    def test_json_nested_same_named_key_after_samples(self):
+        payload = ('{"samples":[{"sample_id":"A","unit":"mm",'
+                   '"widths":[1,2,3]}],'
+                   '"metadata":{"samples":[{"sample_id":"DECOY"}]}}')
+        st, body, _ = self.request("/api/series", "POST", raw=payload,
+                                   ctype="application/json")
+        self.assertEqual(st, 201, body)
+        self.assertEqual([s["sample_id"] for s in body["saved"]], ["A"])
+        st, s, _ = self.request("/api/series/A")
+        self.assertIn("\"sample_id\":\"A\"", s["raw_payload"])
+        self.assertNotIn("DECOY", s["raw_payload"])
+
+    def test_csv_raw_payload_preserves_quotes_crlf_and_trailing_newline(self):
+        csv_bytes = (
+            b'sample_id,unit,start_year,year,width,missing\r\n'
+            b'"Q-01",mm,1990,,1.20,0\r\n'
+            b',  ,  ,  , 0.90 , 0 \r\n'
+            b'Q-01,,,,0,1\r\n'
+            b'\r\n'
+        )
+        st, body, _ = self.request("/api/series", "POST",
+                                   raw=csv_bytes.decode("utf-8"),
+                                   ctype="text/csv")
+        self.assertEqual(st, 201, body)
+        st, s, _ = self.request("/api/series/Q-01")
+        expected = (
+            'sample_id,unit,start_year,year,width,missing\r\n'
+            '"Q-01",mm,1990,,1.20,0\r\n'
+            ',  ,  ,  , 0.90 , 0 \r\n'
+            'Q-01,,,,0,1\r\n'
+        )
+        self.assertEqual(s["raw_payload"], expected)
+        # blank separator line before EOF is excluded, but final CRLF of
+        # the last data line survives
+        self.assertTrue(s["raw_payload"].endswith("0,1\r\n"))
+
+    def test_csv_raw_payload_without_trailing_newline(self):
+        csv_text = ("sample_id,unit,start_year,width,missing\n"
+                    "N1,mm,1999,1.0,0\n"
+                    "N1,,,1.1,0")
+        st, _, _ = self.request("/api/series", "POST", raw=csv_text,
+                                ctype="text/csv")
+        self.assertEqual(st, 201)
+        st, s, _ = self.request("/api/series/N1")
+        self.assertEqual(s["raw_payload"], csv_text)
+        self.assertFalse(s["raw_payload"].endswith("\n\n"))
+
+    def test_csv_raw_payload_quoted_multiline_field(self):
+        # quoted note with embedded newline: one logical row spans two
+        # physical lines; the audit slice must contain both verbatim
+        csv_text = (
+            'sample_id,unit,start_year,width,missing,note\n'
+            'Q03,mm,1992,1.2,0,"line1\nline2"\n'
+            'Q03,,,0.7,0,\n'
+        )
+        st, body, _ = self.request("/api/series", "POST", raw=csv_text,
+                                   ctype="text/csv")
+        self.assertEqual(st, 201, body)
+        st, s, _ = self.request("/api/series/Q03")
+        self.assertEqual(s["raw_payload"], csv_text)
+        self.assertEqual(s["rings"][0]["raw_line"], 3)  # logical row ends L3
+        self.assertEqual(s["rings"][1]["raw_line"], 4)
+
     def test_json_payload_and_contradictory_mark(self):
         payload = {"sample_id": "J01", "unit": "mm", "start_year": 2000,
                    "rings": [{"width": 1.0}, {"width": 0.5,

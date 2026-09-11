@@ -452,18 +452,62 @@ def _skip_ws(text, i):
     return i
 
 
+def _top_level_key_indexes(text):
+    """Map ``key -> (key_start, value_start)`` for keys directly inside the
+    JSON object that begins at ``text``'s first non-space character.
+
+    A structural scan (string- and escape-aware, depth tracking) is used so
+    that same-named keys nested in another object or array -- e.g. a
+    ``"metadata": {"samples": ...}`` decoy placed before the real top-level
+    ``"samples"`` -- cannot shadow the outer key.
+    """
+    i = _skip_ws(text, 0)
+    if i >= len(text) or text[i] != "{":
+        return {}
+    depth = 0
+    keys = {}
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            # read a JSON string token
+            j = i + 1
+            buf = []
+            while j < n:
+                ch = text[j]
+                if ch == "\\":
+                    buf.append(text[j:j + 2])
+                    j += 2
+                    continue
+                if ch == '"':
+                    break
+                buf.append(ch)
+                j += 1
+            token = "".join(buf)
+            j += 1  # past closing quote
+            if depth == 1:
+                k = _skip_ws(text, j)
+                if k < n and text[k] == ":":
+                    v = _skip_ws(text, k + 1)
+                    keys.setdefault(token, (i, v))
+                    i = v
+                    continue
+            i = j
+            continue
+        if c in "{[":
+            depth += 1
+        elif c in "}]":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    return keys
+
+
 def _find_key_value(text, key):
-    """Index of the value following ``"key":`` in a JSON object text."""
-    needle = json.dumps(key)
-    i = 0
-    while True:
-        j = text.find(needle, i)
-        if j < 0:
-            return -1
-        k = _skip_ws(text, j + len(needle))
-        if k < len(text) and text[k] == ":":
-            return _skip_ws(text, k + 1)
-        i = j + 1
+    """Index of the value following the *outer* ``"key":`` in an object."""
+    found = _top_level_key_indexes(text).get(key)
+    return found[1] if found else -1
 
 
 def _array_element_spans(text, start):
@@ -494,6 +538,8 @@ def parse_json(content: str):
     # Locate the sample objects in the *verbatim* request text.
     sample_texts, ring_text_lists = [], []
     stripped = content.lstrip()
+    top_keys = (_top_level_key_indexes(stripped)
+                if isinstance(data, dict) else {})
     if isinstance(data, list):
         try:
             spans = _array_element_spans(stripped, 0)
@@ -501,9 +547,12 @@ def parse_json(content: str):
         except json.JSONDecodeError:
             sample_texts = []
     elif isinstance(data, dict):
-        if "samples" in data:
-            v = _find_key_value(stripped, "samples")
-            if v >= 0 and stripped[v] == "[":
+        # Only the OUTER "samples" key qualifies; a nested decoy such as
+        # metadata.samples is invisible to _top_level_key_indexes.
+        outer = top_keys.get("samples")
+        if outer is not None:
+            v = outer[1]
+            if v < len(stripped) and stripped[v] == "[":
                 try:
                     spans = _array_element_spans(stripped, v)
                     sample_texts = [stripped[a:b] for a, b in spans]
@@ -591,6 +640,22 @@ def parse_csv(content: str):
             return None
         return row[idx]
 
+    # Physical source lines WITH their original terminators (CR/LF) and a
+    # trailing empty element when the file ends with a newline.  Logical
+    # CSV rows may span several physical lines when a quoted field embeds
+    # newlines; ``reader.line_num`` marks the LAST physical line consumed.
+    phys_lines = content.splitlines(keepends=True)
+
+    def source_slice(first, last):
+        """Verbatim source text covering physical lines first..last."""
+        if not phys_lines:
+            return ""
+        first = max(1, first)
+        last = min(last, len(phys_lines))
+        if first > last:
+            return ""
+        return "".join(phys_lines[first - 1:last])
+
     # group state
     groups = []  # list of mutable dicts
     current = None
@@ -599,11 +664,22 @@ def parse_csv(content: str):
     # but finalization still runs to collect *all* structural errors.
     bad_samples = set()
 
-    for row in reader:
-        physical = reader.line_num
+    line_before = 1
+    while True:
+        try:
+            row = next(reader)
+        except StopIteration:
+            break
+        line_end = reader.line_num
+        physical = line_end
+        # first physical line of this logical row (quoted newlines may
+        # make line_end larger)
+        line_start = line_before + 1
+        line_before = line_end
         if not any(c.strip() for c in row):
             continue  # blank separator line
-        raw_line = ",".join(row)
+        # verbatim text of this logical row, exactly as submitted
+        raw_line = source_slice(line_start, line_end).rstrip("\r\n")
 
         sid = (cell(row, "sample_id") or "").strip() or None
         unit = (cell(row, "unit") or "").strip() or None
@@ -618,7 +694,8 @@ def parse_csv(content: str):
             if match is None:
                 match = {"sample_id": sid, "unit": None,
                          "declared_start": None, "rows": [],
-                         "raw_lines": [",".join(header)]}
+                         "header_text": source_slice(1, 1),
+                         "source_spans": []}
                 groups.append(match)
             current = match
 
@@ -628,6 +705,9 @@ def parse_csv(content: str):
             errors.append(e.detail)
             if e.detail.get("sample_id"):
                 bad_samples.add(e.detail["sample_id"])
+
+        # remember the verbatim physical span before any error can skip it
+        current["source_spans"].append((line_start, line_end))
 
         # start_year inheritance / conflict
         try:
@@ -680,7 +760,6 @@ def parse_csv(content: str):
             current["rows"].append({
                 "seq": seq, "year": year, "width": width,
                 "missing": missing, "raw_line": physical, "raw": raw_line})
-            current["raw_lines"].append(raw_line)
         except ValidationError as e:
             _record(e)
             bad_samples.add(current["sample_id"])
@@ -690,10 +769,17 @@ def parse_csv(content: str):
                 "missing": False, "raw_line": physical, "raw": raw_line})
 
     for g in groups:
+        # Verbatim audit text: original header line followed by every
+        # physical source line belonging to this sample, in file order and
+        # with original quoting, CRLF/LF terminators and trailing newline
+        # all preserved.
+        spans = sorted(g["source_spans"])
+        raw_payload = g["header_text"] + "".join(
+            source_slice(a, b) for a, b in spans)
         record, errs, _w = finalize_sample(
             g["sample_id"], g["unit"], g["declared_start"], g["rows"],
             payload_format="csv",
-            raw_payload="\n".join(g["raw_lines"]))
+            raw_payload=raw_payload)
         if record is None:
             errors.extend(errs)
             if g["sample_id"]:
