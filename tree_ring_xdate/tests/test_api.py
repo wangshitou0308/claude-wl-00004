@@ -130,6 +130,82 @@ class TestIngestion(ServerTestBase):
         self.assertEqual(st, 422)
         self.assertIn("strict", body["message"])
 
+    def test_strict_mode_persists_nothing_from_mixed_batch(self):
+        # one perfectly valid sibling plus one invalid sample: strict
+        # mode must roll the whole request back, no partial write.
+        mixed = (
+            "sample_id,unit,start_year,year,width,missing\n"
+            "GOOD1,mm,1980,,1.1,0\n"
+            "GOOD1,,,,0.9,0\n"
+            "GOOD1,,,,1.0,0\n"
+            "BAD1,mm,1980,,1.2,0\n"
+            "BAD1,cm,,0.8,0\n"          # E_UNIT_CONFLICT
+            "BAD1,,,-0.4,0\n")         # E_NONPOSITIVE_WIDTH
+        st, body, _ = self.request("/api/series", "POST", raw=mixed,
+                                   ctype="text/csv", strict=1)
+        self.assertEqual(st, 422)
+        self.assertEqual(body["n_saved"], 0)
+        self.assertTrue(body["errors"])
+        st, lst, _ = self.request("/api/series")
+        self.assertEqual(lst["series"], [])
+        # the valid sample must not be retrievable either
+        st, _, _ = self.request("/api/series/GOOD1")
+        self.assertEqual(st, 404)
+
+    def test_non_strict_mixed_batch_keeps_valid_sibling(self):
+        mixed = (
+            "sample_id,unit,start_year,year,width,missing\n"
+            "GOOD1,mm,1980,,1.1,0\n"
+            "BAD1,mm,1980,,1.2,0\n"
+            "BAD1,cm,,0.8,0\n")
+        st, body, _ = self.request("/api/series", "POST", raw=mixed,
+                                   ctype="text/csv")
+        self.assertEqual(st, 201)
+        self.assertEqual([s["sample_id"] for s in body["saved"]], ["GOOD1"])
+        st, s, _ = self.request("/api/series/GOOD1")
+        self.assertEqual(st, 200)
+        st, _, _ = self.request("/api/series/BAD1")
+        self.assertEqual(st, 404)
+
+    def test_json_raw_payload_is_verbatim(self):
+        # newlines, custom spacing and indentation must survive byte-for-byte
+        pretty = (
+            '{\n'
+            '  "samples" : [\n'
+            '    {\n'
+            '        "sample_id"  :  "PRETTY",\n'
+            '        "unit":   "mm",\n'
+            '        "start_year" :2001,\n'
+            '        "rings" : [ {"width" : 1.10},\n'
+            '                    {"width": 0, "missing" : true},\n'
+            '                    {"width" :0.90} ]\n'
+            '    }\n'
+            '  ]\n'
+            '}')
+        st, body, _ = self.request("/api/series", "POST", raw=pretty,
+                                   ctype="application/json")
+        self.assertEqual(st, 201, body)
+        st, s, _ = self.request("/api/series/PRETTY")
+        self.assertEqual(s["raw_payload"],
+                         '{\n'
+                         '        "sample_id"  :  "PRETTY",\n'
+                         '        "unit":   "mm",\n'
+                         '        "start_year" :2001,\n'
+                         '        "rings" : [ {"width" : 1.10},\n'
+                         '                    {"width": 0, "missing" : true},\n'
+                         '                    {"width" :0.90} ]\n'
+                         '    }')
+        # ring raw_line keeps the JSON item index
+        self.assertEqual([r["raw_line"] for r in s["rings"]], [1, 2, 3])
+
+    def test_json_single_object_raw_payload_is_verbatim(self):
+        pretty = '  {\n "sample_id":"SOLO","unit":"mm",\n "start_year":1999,\n "rings":[{"width":1.0}]\n}  '
+        st, body, _ = self.request("/api/series", "POST", raw=pretty,
+                                   ctype="application/json")
+        self.assertEqual(st, 201, body)
+        st, s, _ = self.request("/api/series/SOLO")
+        self.assertEqual(s["raw_payload"], pretty)
+
     def test_json_payload_and_contradictory_mark(self):
         payload = {"sample_id": "J01", "unit": "mm", "start_year": 2000,
                    "rings": [{"width": 1.0}, {"width": 0.5,
@@ -297,6 +373,59 @@ class TestHypotheses(ServerTestBase):
         st, chrono, _ = self.request("/api/hypotheses/BAD/chronology")
         types = [c["type"] for c in chrono["lock_conflicts"]]
         self.assertIn("WEAK_MATCH", types)
+
+    def test_lock_overrides_known_start_and_reports_conflict(self):
+        # SITE_A01 is a dated sample (known start 1901).  Locking it
+        # elsewhere must actually move it in the chronology and surface a
+        # LOCK_VS_KNOWN conflict rather than being silently ignored.
+        st, s0, _ = self.request("/api/series/SITE_A01")
+        self.assertEqual(s0["known_start"], 1901)
+        self.request("/api/hypotheses", "POST",
+                     body={"name": "REDATE", "note": "re-date A01"})
+        st, body, _ = self.request(
+            "/api/hypotheses/REDATE/locks", "POST",
+            body={"sample_id": "SITE_A01", "offset": 1920})
+        self.assertEqual(st, 200)
+
+        st, chrono, _ = self.request("/api/hypotheses/REDATE/chronology")
+        self.assertEqual(st, 200)
+        # the locked position wins, not the ingested known start
+        self.assertEqual(chrono["placements"]["SITE_A01"], 1920)
+        self.assertEqual(chrono["known_starts"]["SITE_A01"], 1901)
+        self.assertGreaterEqual(chrono["n_known_start_conflicts"], 1)
+        kc = [c for c in chrono["lock_conflicts"]
+              if c["type"] == "LOCK_VS_KNOWN" and c["sample_id"] == "SITE_A01"]
+        self.assertEqual(len(kc), 1)
+        self.assertEqual(kc[0]["known_start"], 1901)
+        self.assertEqual(kc[0]["locked_offset"], 1920)
+        self.assertEqual(kc[0]["shift"], 19)
+
+        # the report must carry the same explicit conflict
+        st, report, _ = self.request("/api/hypotheses/REDATE/report")
+        self.assertTrue(any(
+            c["type"] == "LOCK_VS_KNOWN" and c["sample_id"] == "SITE_A01"
+            for c in report["flags"]["lock_conflicts"]))
+
+        # master reference under this hypothesis must also move
+        st, master, _ = self.request("/api/master", hypothesis="REDATE")
+        member = next(m for m in master["meta"]["members"]
+                      if m["sample_id"] == "SITE_A01")
+        self.assertEqual(member["start"], 1920)
+        self.assertTrue(any(c["sample_id"] == "SITE_A01"
+                            for c in master["meta"]
+                            ["known_start_conflicts"]))
+
+    def test_matching_lock_on_dated_sample_has_no_conflict(self):
+        self.request("/api/hypotheses", "POST", body={"name": "SAME"})
+        st, _, _ = self.request(
+            "/api/hypotheses/SAME/locks", "POST",
+            body={"sample_id": "SITE_A01", "offset": 1901})
+        self.assertEqual(st, 200)
+        st, chrono, _ = self.request("/api/hypotheses/SAME/chronology")
+        self.assertEqual(chrono["placements"]["SITE_A01"], 1901)
+        self.assertEqual(chrono["n_known_start_conflicts"], 0)
+        self.assertFalse([c for c in chrono["lock_conflicts"]
+                          if c["type"] == "LOCK_VS_KNOWN"])
 
     def test_unlock_and_delete(self):
         self.request("/api/hypotheses", "POST", body={"name": "TMP"})

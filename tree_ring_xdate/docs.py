@@ -760,7 +760,8 @@ padding:0 .35rem;font-size:.8rem;color:#3a5a2a}
 <code>text/csv</code>。多样本批量上传时，每个样本独立校验，
 错误定位到<b>样本编号 + 原始行</b>（CSV 为物理行号，表头是第 1 行；
 JSON 为 rings 数组项序号）。已接受样本的原文保存在数据库
-<code>series.raw_payload</code>，<b>输入保持原样</b>。</p>
+<code>series.raw_payload</code>，<b>输入逐字保持原样</b>：JSON 保留请求正文中该样本的
+原始换行、缩进和自定义空格（不做重新序列化），CSV 保留该样本的原始行。</p>
 <p>CSV 列名（中英别名均可）：<code>sample_id, unit, start_year, year,
 width, missing</code>。同一文件可含多个样本：留空
 <code>sample_id/unit/start_year</code> 的行延续上一个样本；
@@ -776,7 +777,8 @@ E_NONPOSITIVE_WIDTH（非正宽度且未标缺失）、E_DUPLICATE_YEAR（重复
 E_CONFLICTING_MARK（标了缺失却给正宽度，或零宽度未标记）、E_BAD_YEAR、
 E_PARTIAL_YEARS、E_START_CONFLICT、E_EMPTY、E_NO_UNIT。
 稀疏年份（跳过若干日历年）不报错，自动补 width=0 缺失环并给 W_IMPLICIT_GAP
-警告。加 <code>?strict=1</code> 时任一样本出错则整批不入库。</div>
+警告。加 <code>?strict=1</code> 时先整批校验、任一样本出错则整批回滚（HTTP 422，
+数据库中不留任何样本）；不加 strict 时有效样本照常入库、无效样本在 errors 中逐行列出。</div>
 
 <h2>3. 滑动交叉定年 <span class="tag">POST/GET /api/crossdate</span></h2>
 <pre>{"sample_id":"B01","reference":"master",
@@ -809,14 +811,19 @@ reference 可填 <code>master</code>（当前主年表：已定年样本 + 假�
 <tr><td>删除假设</td><td>DELETE /api/hypotheses/H1</td></tr>
 <tr><td>假设对比</td><td>GET /api/compare?a=H1&amp;b=H2</td></tr>
 <tr><td>对主年表差异</td><td>GET /api/hypotheses/H1/vs-master</td></tr></table>
+<div class="note"><b>锁定优先级</b>：锁定总是按假设生效——即使样本上传时带已知
+start_year，年表与主年表也一律采用锁定的 offset，旧起始年被实际移开而不是被静默忽略；
+两者不一致时年表返回 <code>LOCK_VS_KNOWN</code> 冲突（含 known_start、locked_offset、
+shift 年数）。offset 与已知起始年相同则不产生冲突。</div>
 
 <h2>5. 年表统计与标记 <span class="tag">GET /api/hypotheses/{name}/chronology</span></h2>
 <p>逐年给出 n_samples、mean_index、median_index、stdev_index、mad：</p>
 <ul>
 <li><b>LOW_COVERAGE</b>：该年样本数 &lt; min_samples（默认 3）。</li>
 <li><b>OUTLIER</b>：某样本标准化指数偏离年均值超过 outlier_sd 个标准差（默认 2）。</li>
-<li><b>LOCK_CONFLICT</b>：① MISSING_VS_PRESENT——同一年一个样本有缺失环而其他样本有
-生长（物理位置矛盾）；② WEAK_MATCH——锁定样本在重叠段与其余样本的
+<li><b>LOCK_CONFLICT</b>：① LOCK_VS_KNOWN——样本锁定偏移与上传时记录的已知起始年
+不一致（锁定仍然生效，并给出 shift 年数）；② MISSING_VS_PRESENT——某年多数覆盖样本
+都有缺失环而个别样本却有生长轮（物理位置矛盾）；③ WEAK_MATCH——锁定样本在重叠段与其余样本的
 leave-one-out 相关低于 weak_correlation（默认 0.3）。</li>
 </ul>
 

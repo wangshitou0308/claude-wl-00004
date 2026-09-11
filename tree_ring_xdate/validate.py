@@ -320,11 +320,11 @@ def finalize_sample(sample_id, unit, declared_start, rows, *,
 # JSON
 # ---------------------------------------------------------------------------
 
-def _json_sample(obj, index):
+def _json_sample(obj, index, raw_text=None, ring_texts=None):
     if not isinstance(obj, dict):
         return None, [_err("E_BAD_JSON",
                            f"sample #{index} is not a JSON object",
-                           row=index, raw=_safe_json(obj))]
+                           row=index, raw=raw_text)]
     sample_id = obj.get("sample_id") or obj.get("sample") or obj.get("id")
     unit = obj.get("unit") or obj.get("units")
     declared_start = obj.get("start_year", obj.get("known_start",
@@ -337,14 +337,16 @@ def _json_sample(obj, index):
                                f"start_year not an integer: "
                                f"{declared_start!r}",
                                sample_id=sample_id, field="start_year",
-                               row=index, raw=_safe_json(obj))]
+                               row=index, raw=raw_text)]
 
     raw_rows = obj.get("rings")
     rows = []
     errors = []
     if isinstance(raw_rows, list):
         for i, item in enumerate(raw_rows, start=1):
-            raw = _safe_json(item)
+            # verbatim source text of this ring (falls back to re-encoding)
+            raw = ring_texts[i - 1] if ring_texts and i <= len(ring_texts) \
+                else _safe_json(item)
             try:
                 if isinstance(item, dict):
                     width_in = item.get("width", item.get("w"))
@@ -378,7 +380,8 @@ def _json_sample(obj, index):
             if not isinstance(widths, list):
                 raise ValidationError(
                     "E_BAD_WIDTH", "'widths' must be a list",
-                    sample_id=sample_id, row=index, raw=_safe_json(obj))
+                    sample_id=sample_id, row=index,
+                    raw=raw_text if raw_text is not None else _safe_json(obj))
             missing_pos = set()
             for v in obj.get("missing", []) or []:
                 missing_pos.add(int(v))
@@ -413,19 +416,23 @@ def _json_sample(obj, index):
             errors.append(e.detail)
         except (ValueError, TypeError) as e:
             errors.append(_err("E_BAD_WIDTH", str(e), sample_id=sample_id,
-                               row=index, raw=_safe_json(obj)))
+                               row=index,
+                               raw=raw_text if raw_text is not None
+                               else _safe_json(obj)))
     else:
         return None, [_err("E_EMPTY",
                            "sample has no 'rings' or 'widths' list",
                            sample_id=sample_id, row=index,
-                           raw=_safe_json(obj))]
+                           raw=raw_text if raw_text is not None
+                           else _safe_json(obj))]
 
     if errors:
         return None, errors, []
 
     return finalize_sample(sample_id, unit, declared_start, rows,
                            payload_format="json",
-                           raw_payload=_safe_json(obj))
+                           raw_payload=raw_text if raw_text is not None
+                           else _safe_json(obj))
 
 
 def _safe_json(obj):
@@ -433,6 +440,45 @@ def _safe_json(obj):
         return json.dumps(obj, ensure_ascii=False)
     except (TypeError, ValueError):
         return repr(obj)
+
+
+# ---------------------------------------------------------------------------
+# Verbatim JSON slicing
+# ---------------------------------------------------------------------------
+
+def _skip_ws(text, i):
+    while i < len(text) and text[i] in " \t\r\n":
+        i += 1
+    return i
+
+
+def _find_key_value(text, key):
+    """Index of the value following ``"key":`` in a JSON object text."""
+    needle = json.dumps(key)
+    i = 0
+    while True:
+        j = text.find(needle, i)
+        if j < 0:
+            return -1
+        k = _skip_ws(text, j + len(needle))
+        if k < len(text) and text[k] == ":":
+            return _skip_ws(text, k + 1)
+        i = j + 1
+
+
+def _array_element_spans(text, start):
+    """``(start)`` points at '['; return list of (a, b) element spans."""
+    assert text[start] == "["
+    spans = []
+    dec = json.JSONDecoder()
+    i = _skip_ws(text, start + 1)
+    while i < len(text) and text[i] != "]":
+        obj, end = dec.raw_decode(text, i)
+        spans.append((i, end))
+        i = _skip_ws(text, end)
+        if i < len(text) and text[i] == ",":
+            i = _skip_ws(text, i + 1)
+    return spans
 
 
 def parse_json(content: str):
@@ -444,6 +490,34 @@ def parse_json(content: str):
             "message": f"invalid JSON: {e.msg}",
             "line": e.lineno, "row": None, "field": None,
             "raw": None}]}
+
+    # Locate the sample objects in the *verbatim* request text.
+    sample_texts, ring_text_lists = [], []
+    stripped = content.lstrip()
+    if isinstance(data, list):
+        try:
+            spans = _array_element_spans(stripped, 0)
+            sample_texts = [stripped[a:b] for a, b in spans]
+        except json.JSONDecodeError:
+            sample_texts = []
+    elif isinstance(data, dict):
+        if "samples" in data:
+            v = _find_key_value(stripped, "samples")
+            if v >= 0 and stripped[v] == "[":
+                try:
+                    spans = _array_element_spans(stripped, v)
+                    sample_texts = [stripped[a:b] for a, b in spans]
+                except json.JSONDecodeError:
+                    sample_texts = []
+        else:
+            sample_texts = [content]
+    if not sample_texts:
+        # malformed structure: fall back to re-encoded text
+        sample_texts = [None] * len(
+            data if isinstance(data, list)
+            else data.get("samples", []) if isinstance(data, dict)
+            else [data])
+
     if isinstance(data, dict) and "samples" in data:
         samples = data["samples"]
     elif isinstance(data, list):
@@ -456,8 +530,21 @@ def parse_json(content: str):
             "line": None, "row": None, "field": "samples", "raw": None}]}
 
     accepted, errors = [], []
-    for i, obj in enumerate(samples, start=1):
-        record, errs, _warnings = _json_sample(obj, i)
+    for i, obj in enumerate(samples):
+        raw_text = sample_texts[i] if i < len(sample_texts) else None
+        # per-ring verbatim text inside this sample's "rings" array
+        ring_texts = None
+        if raw_text is not None:
+            rv = _find_key_value(raw_text, "rings")
+            if rv >= 0 and raw_text[rv] == "[":
+                try:
+                    ring_texts = [raw_text[a:b]
+                                  for a, b in
+                                  _array_element_spans(raw_text, rv)]
+                except json.JSONDecodeError:
+                    ring_texts = None
+        record, errs, _warnings = _json_sample(
+            obj, i + 1, raw_text=raw_text, ring_texts=ring_texts)
         if record is not None:
             accepted.append(record)
         errors.extend(errs)

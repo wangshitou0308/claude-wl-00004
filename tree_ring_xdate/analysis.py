@@ -34,21 +34,48 @@ def placed_year_widths(series: dict, offset: int | None) -> dict[int, float]:
     return {offset + r["seq"] - 1: r["width"] for r in series["rings"]}
 
 
-def resolve_placements(conn, hypothesis: str | None = None) -> dict[str, int]:
-    """Current placement of every series: known start or a hypothesis lock.
+def resolve_placements(conn, hypothesis: str | None = None
+                       ) -> tuple[dict[str, int], dict[str, int | None],
+                                  dict[str, int]]:
+    """Return ``(placements, known_starts, locks)`` for every series.
 
-    Dated series (those with a ``known_start``) are always placed.  For
-    undated series the lock from ``hypothesis`` is used when given.
+    A lock in ``hypothesis`` always wins over the ingested known start --
+    a re-dating decision must never be silently ignored.  Samples with
+    neither are left out (undated and unlocked).
     """
     locks = db.locks_of(conn, hypothesis) if hypothesis else {}
-    placements = {}
+    placements: dict[str, int] = {}
+    known: dict[str, int | None] = {}
     for s in db.list_series(conn):
-        full = db.get_series(conn, s["sample_id"])
-        if full["known_start"] is not None:
-            placements[s["sample_id"]] = full["known_start"]
-        elif s["sample_id"] in locks:
-            placements[s["sample_id"]] = locks[s["sample_id"]]
-    return placements
+        sid = s["sample_id"]
+        full = db.get_series(conn, sid)
+        known[sid] = full["known_start"]
+        if sid in locks:
+            placements[sid] = locks[sid]
+        elif full["known_start"] is not None:
+            placements[sid] = full["known_start"]
+    return placements, known, locks
+
+
+def known_start_conflicts(known: dict[str, int | None],
+                          locks: dict[str, int]) -> list[dict]:
+    """Locks that contradict the start year recorded at ingestion time."""
+    out = []
+    for sid, off in locks.items():
+        ks = known.get(sid)
+        if ks is not None and off != ks:
+            out.append({
+                "type": "LOCK_VS_KNOWN",
+                "sample_id": sid,
+                "known_start": ks,
+                "locked_offset": off,
+                "shift": off - ks,
+                "message": (f"{sid} was ingested with known start {ks} but "
+                            f"the hypothesis locks it at {off} "
+                            f"(shift {off - ks:+d} yr); the locked position "
+                            f"is used for this hypothesis"),
+            })
+    return sorted(out, key=lambda c: c["sample_id"])
 
 
 def build_reference(conn, reference: str,
@@ -65,21 +92,31 @@ def build_reference(conn, reference: str,
         s = db.get_series(conn, reference)
         if s is None:
             raise KeyError(f"reference series not found: {reference}")
-        if s["known_start"] is None:
-            offset = (db.locks_of(conn, hypothesis).get(reference)
-                      if hypothesis else None)
-            if offset is None:
-                raise ValueError(
-                    f"reference series {reference!r} is not dated and has no "
-                    f"lock in hypothesis {hypothesis!r}")
-        else:
+        # A lock, when present, wins over the ingested known start so a
+        # re-dated sample can itself serve as the reference.
+        locked = (db.locks_of(conn, hypothesis).get(reference)
+                  if hypothesis else None)
+        if locked is not None:
+            offset = locked
+        elif s["known_start"] is not None:
             offset = s["known_start"]
+        else:
+            raise ValueError(
+                f"reference series {reference!r} is not dated and has no "
+                f"lock in hypothesis {hypothesis!r}")
         yw = placed_year_widths(s, offset)
-        return yw, {"type": "series", "sample_id": reference,
-                    "unit": s["unit"], "start": min(yw), "end": max(yw),
-                    "n_years": len(yw)}
+        meta = {"type": "series", "sample_id": reference,
+                "unit": s["unit"], "start": min(yw), "end": max(yw),
+                "n_years": len(yw), "offset": offset,
+                "known_start": s["known_start"],
+                "hypothesis": hypothesis}
+        if (s["known_start"] is not None
+                and locked is not None and locked != s["known_start"]):
+            meta["known_start_conflicts"] = known_start_conflicts(
+                {reference: s["known_start"]}, {reference: locked})
+        return yw, meta
 
-    placements = resolve_placements(conn, hypothesis)
+    placements, known, locks = resolve_placements(conn, hypothesis)
     years, per_year = set(), defaultdict(list)
     members = []
     for sid, off in placements.items():
@@ -93,11 +130,14 @@ def build_reference(conn, reference: str,
         for y, w in yw.items():
             per_year[y].append(w / mean_w if w > 0 else 0.0)
             years.add(y)
-    return ({y: statistics.fmean(per_year[y]) for y in sorted(years)},
-            {"type": "master", "members": members,
-             "start": min(years) if years else None,
-             "end": max(years) if years else None,
-             "n_years": len(years)})
+    meta = {"type": "master", "members": members,
+            "hypothesis": hypothesis,
+            "start": min(years) if years else None,
+            "end": max(years) if years else None,
+            "n_years": len(years),
+            "known_start_conflicts":
+                known_start_conflicts(known, locks)}
+    return ({y: statistics.fmean(per_year[y]) for y in sorted(years)}, meta)
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +344,7 @@ def build_chronology(conn, hypothesis: str | None = None, *,
                         sample correlates weakly with all the others
                         (leave-one-out over the common interval)
     """
-    placements = resolve_placements(conn, hypothesis)
+    placements, known, locks = resolve_placements(conn, hypothesis)
     per_year = defaultdict(list)   # year -> [(sid, index)]
     sample_yw = {}
     units = defaultdict(set)
@@ -357,8 +397,9 @@ def build_chronology(conn, hypothesis: str | None = None, *,
             "flags": flags,
         })
 
-    conflicts = _lock_conflicts(conn, placements, sample_yw,
-                                weak_correlation)
+    conflicts = known_start_conflicts(known, locks)
+    conflicts.extend(_lock_conflicts(conn, placements, sample_yw,
+                                     weak_correlation))
     return {
         "hypothesis": hypothesis,
         "start": years[0] if years else None,
@@ -366,10 +407,13 @@ def build_chronology(conn, hypothesis: str | None = None, *,
         "n_years": len(years),
         "n_samples": len(sample_yw),
         "placements": placements,
+        "known_starts": known,
         "yearly": yearly,
         "outliers": outliers,
         "unit_mismatches": unit_mismatches,
         "lock_conflicts": conflicts,
+        "n_known_start_conflicts":
+            sum(1 for c in conflicts if c["type"] == "LOCK_VS_KNOWN"),
         "thresholds": {"min_samples": min_samples,
                        "outlier_sd": outlier_sd,
                        "weak_correlation": weak_correlation},

@@ -188,6 +188,17 @@ class Handler(BaseHTTPRequestHandler):
             content,
             content_type="application/" + fmt,
             filename=fname)
+        # Strict mode: validate the *whole* batch first; never persist a
+        # single ring when any sample was rejected.
+        if strict and parsed["errors"]:
+            self._send(422, {
+                "saved": [],
+                "n_saved": 0,
+                "n_errors": len(parsed["errors"]),
+                "errors": parsed["errors"],
+                "message": ("strict mode: request rejected, nothing was "
+                            "saved")})
+            return
         saved = []
         for record in parsed["accepted"]:
             sid = db.upsert_series(self.conn, record)
@@ -199,11 +210,6 @@ class Handler(BaseHTTPRequestHandler):
                           "unit": record["unit"],
                           "has_missing": record["has_missing"],
                           "warnings": record["warnings"]})
-        if strict and parsed["errors"]:
-            return self._send(422, {
-                "saved": [], "rejected": saved and [],
-                "errors": parsed["errors"],
-                "message": "strict mode: request rejected, nothing saved"})
         self._send(201 if saved else 200, {
             "format": parsed["format"],
             "saved": saved,
@@ -346,6 +352,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def ep_master(self, query):
         hypothesis = query.get("hypothesis", DEFAULT_HYPOTHESIS)
+        if not db.get_hypothesis(self.conn, hypothesis, with_locks=False):
+            if "hypothesis" in query:
+                raise ApiError(404, "NOT_FOUND",
+                               f"hypothesis not found: {hypothesis}")
+            db.create_hypothesis(self.conn, hypothesis,
+                                 "auto-created working hypothesis")
         yw, meta = analysis.build_reference(self.conn, "master", hypothesis)
         self._send(200, {"meta": meta,
                          "years": [{"year": y, "index": yw[y]}
