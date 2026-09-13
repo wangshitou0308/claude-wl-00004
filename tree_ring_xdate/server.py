@@ -16,7 +16,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import analysis, db, validate
+from . import analysis, corrections, db, validate
 from .docs import OPENAPI, HTML_DOCS
 
 DEFAULT_HYPOTHESIS = "default"
@@ -159,6 +159,10 @@ class Handler(BaseHTTPRequestHandler):
                 route(method, path, query, self)
         except ApiError as e:
             self._send(e.status, e.body)
+        except corrections.CorrectionError as e:
+            self._send(422, {"error": {"code": "CORRECTION_REJECTED",
+                                       "message": str(e)},
+                             "errors": e.errors})
         except KeyError as e:
             self._send(404, {"error": {"code": "NOT_FOUND",
                                       "message": str(e).strip("'")}})
@@ -405,6 +409,119 @@ class Handler(BaseHTTPRequestHandler):
                    download_name=(f"xdate_{hyp_name}.json"
                                   if download else None))
 
+    # -- correction drafts -------------------------------------------------
+    def ep_correction_create(self, query):
+        body = self._json_body()
+        sid = body.get("sample_id") or query.get("sample_id")
+        if not sid:
+            raise ApiError(400, "MISSING_PARAM", "sample_id is required")
+        offset = body.get("offset", body.get("start_year"))
+        if offset is None:
+            raise ApiError(400, "MISSING_PARAM",
+                           "offset (calendar year of ring 1) is required")
+        events = body.get("events")
+        if events is None:
+            raise ApiError(400, "MISSING_PARAM",
+                           "events (missing_ring / false_ring list) is "
+                           "required")
+        run_id = body.get("run_id")
+        draft = corrections.create_draft(
+            self.conn, sample_id=sid, offset=int(offset), events=events,
+            run_id=int(run_id) if run_id is not None else None,
+            reference=body.get("reference", "master"),
+            hypothesis=body.get("hypothesis"),
+            min_overlap=int(body.get("min_overlap", 20)),
+            narrow_z=float(body.get("narrow_z", -1.0)),
+            narrow_q=float(body.get("narrow_q", 0.1)),
+            note=body.get("note", ""))
+        self._send(201, draft)
+
+    def ep_correction_list(self, query):
+        self._send(200, {"corrections": db.list_corrections(
+            self.conn, sample_id=query.get("sample_id"))})
+
+    def _correction_head(self, did):
+        head = db.get_correction(self.conn, int(did))
+        if head is None:
+            raise ApiError(404, "NOT_FOUND",
+                           f"correction draft not found: {did}")
+        return head
+
+    def ep_correction_get(self, query, did):
+        head = self._correction_head(did)
+        version = int(query.get("version", head["latest_version"]))
+        row = db.get_correction_version(self.conn, int(did), version)
+        if row is None:
+            raise ApiError(404, "NOT_FOUND",
+                           f"draft {did} has no version {version}")
+        row["snapshot"] = head["snapshot"]
+        row["candidate"] = head.get("candidate")
+        self._send(200, corrections.version_public(
+            corrections.evaluate_version(self.conn, row), with_mapping=True))
+
+    def ep_correction_preview(self, query, did):
+        # preview == evaluate a version against the frozen snapshot
+        self.ep_correction_get(query, did)
+
+    def ep_correction_versions(self, query, did):
+        head = self._correction_head(did)
+        rows = []
+        for v in range(1, head["latest_version"] + 1):
+            row = db.get_correction_version(self.conn, int(did), v)
+            rows.append({"version": v, "note": row["note"],
+                         "n_events": len(row["events"]),
+                         "events": row["events"],
+                         "created_at": row["created_at"]})
+        self._send(200, {"draft_id": int(did), "versions": rows,
+                         "latest_version": head["latest_version"],
+                         "status": head["status"]})
+
+    def ep_correction_new_version(self, query, did):
+        self._correction_head(did)
+        body = self._json_body()
+        events = body.get("events")
+        if events is None:
+            raise ApiError(400, "MISSING_PARAM",
+                           "events (missing_ring / false_ring list) is "
+                           "required")
+        out = corrections.add_version(self.conn, int(did), events=events,
+                                      note=body.get("note", ""))
+        self._send(201, out)
+
+    def ep_correction_adopt(self, query, did):
+        self._correction_head(did)
+        body = self._json_body() if self.command == "POST" else {}
+        hypothesis = (body.get("hypothesis") or query.get("hypothesis")
+                      or DEFAULT_HYPOTHESIS)
+        version = body.get("version", query.get("version"))
+        out = corrections.adopt_draft(
+            self.conn, int(did), hypothesis=hypothesis,
+            version=int(version) if version is not None else None)
+        self._send(200, out)
+
+    def ep_correction_revoke(self, query, did):
+        self._correction_head(did)
+        out = corrections.revoke_draft(self.conn, int(did))
+        self._send(200, out)
+
+    def ep_correction_compare(self, query, did):
+        self._correction_head(did)
+        a, b = query.get("a"), query.get("b")
+        if not a or not b:
+            raise ApiError(400, "MISSING_PARAM",
+                           "query parameters 'a' and 'b' (version numbers) "
+                           "are required")
+        self._send(200, corrections.compare_versions(
+            self.conn, int(did), int(a), int(b)))
+
+    def ep_correction_download(self, query, did):
+        self._correction_head(did)
+        report = corrections.draft_report(self.conn, int(did))
+        download = query.get("download", "1").lower() in ("1", "true")
+        self._send(200, report,
+                   download_name=(f"correction_{did}.json"
+                                  if download else None))
+
 
 # ---------------------------------------------------------------------------
 # Routing table
@@ -456,6 +573,16 @@ _ROUTES = [
     ({"GET"},    "/api/chronology",                    Handler.ep_chronology_default),
     ({"GET"},    "/api/master",                        Handler.ep_master),
     ({"GET"},    "/api/compare",                       Handler.ep_compare),
+    ({"POST"},   "/api/corrections",                   Handler.ep_correction_create),
+    ({"GET"},    "/api/corrections",                   Handler.ep_correction_list),
+    ({"GET"},    "/api/corrections/{did}",             Handler.ep_correction_get),
+    ({"GET"},    "/api/corrections/{did}/preview",     Handler.ep_correction_preview),
+    ({"GET"},    "/api/corrections/{did}/versions",    Handler.ep_correction_versions),
+    ({"POST"},   "/api/corrections/{did}/versions",    Handler.ep_correction_new_version),
+    ({"POST"},   "/api/corrections/{did}/adopt",       Handler.ep_correction_adopt),
+    ({"POST"},   "/api/corrections/{did}/revoke",      Handler.ep_correction_revoke),
+    ({"GET"},    "/api/corrections/{did}/compare",     Handler.ep_correction_compare),
+    ({"GET"},    "/api/corrections/{did}/download",    Handler.ep_correction_download),
 ]
 
 _ENDPOINT_HELP = [
@@ -487,6 +614,26 @@ _ENDPOINT_HELP = [
      "description": "假设锁定位置与已定年主年表的逐年差异"},
     {"method": "GET", "path": "/api/compare?a=&b=",
      "description": "比较两个定年假设的样本位置"},
+    {"method": "POST", "path": "/api/corrections",
+     "description": "从滑动候选偏移创建校正草案（missing_ring 在测量序号之间插入缺失日历年，false_ring 把指定测量标为不参与定年的伪环）；事件重复/次序矛盾/越界/与已标缺失环或显式年份冲突时 422 并定位测量序号"},
+    {"method": "GET", "path": "/api/corrections",
+     "description": "列出校正草案（可按 sample_id 过滤）"},
+    {"method": "GET", "path": "/api/corrections/{id}",
+     "description": "草案最新版本及分段试算（?version=N 查看指定版本）"},
+    {"method": "GET", "path": "/api/corrections/{id}/preview?version=N",
+     "description": "按事件重建分段年份映射，重算各段及全序列重叠区间、Pearson、符号一致率、共同极窄环，并列出相对原候选的变化"},
+    {"method": "GET", "path": "/api/corrections/{id}/versions",
+     "description": "草案全部版本"},
+    {"method": "POST", "path": "/api/corrections/{id}/versions",
+     "description": "替换事件列表生成新版本（草案被采用前可改）"},
+    {"method": "POST", "path": "/api/corrections/{id}/adopt",
+     "description": "采用草案：分段映射写入指定假设并进入主年表（任一有效分段不足 min_overlap 时 422 拒绝并定位测量序号）；原始宽度、年份与 raw_payload 不变"},
+    {"method": "POST", "path": "/api/corrections/{id}/revoke",
+     "description": "撤销采用，恢复样本原 placement"},
+    {"method": "GET", "path": "/api/corrections/{id}/compare?a=&b=",
+     "description": "比较两个草案版本的事件与统计差异"},
+    {"method": "GET", "path": "/api/corrections/{id}/download",
+     "description": "草案完整 JSON 导出（含来源运行、参照快照与全部版本）"},
     {"method": "GET", "path": "/api/master",
      "description": "当前主年表（逐年平均指数）"},
     {"method": "GET", "path": "/api/openapi.json",

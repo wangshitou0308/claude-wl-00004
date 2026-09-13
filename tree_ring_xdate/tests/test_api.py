@@ -586,6 +586,269 @@ class TestHypotheses(ServerTestBase):
         self.assertGreater(len(body["years"]), 100)
 
 
+class TestCorrections(ServerTestBase):
+    """Correction drafts: missing-ring gaps and false-ring exclusions."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(EXAMPLES, "samples.csv"),
+                  encoding="utf-8") as f:
+            cls.csv = f.read()
+
+    def setUp(self):
+        super().setUp()
+        st, body, _ = self.request("/api/series", "POST", raw=self.csv,
+                                   ctype="text/csv")
+        self.assertEqual(st, 201, body)
+        st, cd, _ = self.request(
+            "/api/crossdate", "POST",
+            body={"sample_id": "UNKNOWN_01", "offset_min": 1900,
+                  "offset_max": 1990, "min_overlap": 30})
+        self.assertEqual(st, 200)
+        self.run_id = cd["run_id"]
+        self.best_offset = cd["candidates"][0]["offset"]
+
+    def _create(self, events, **kw):
+        body = {"sample_id": "UNKNOWN_01", "offset": self.best_offset,
+                "run_id": self.run_id, "min_overlap": 10,
+                "events": events}
+        body.update(kw)
+        return self.request("/api/corrections", "POST", body=body)
+
+    # -- creation / preview ------------------------------------------------
+    def test_create_draft_segments_and_changes(self):
+        st, draft, _ = self._create(
+            [{"type": "missing_ring", "after_seq": 20},
+             {"type": "false_ring", "seq": 35}])
+        self.assertEqual(st, 201, draft)
+        self.assertEqual(draft["draft_id"], 1)
+        self.assertEqual(draft["version"], 1)
+        self.assertEqual(draft["status"], "draft")
+        # three segments: 1..20(+gap), 21..34, 36..60
+        segs = draft["evaluation"]["segments"]
+        self.assertEqual(len(segs), 3)
+        self.assertEqual(segs[0]["start_year"], self.best_offset)
+        self.assertEqual(segs[0]["n_missing"], 1)   # inserted gap year
+        self.assertEqual(segs[1]["n_years"], 14)
+        for s in segs:
+            self.assertIn("correlation", s)
+            self.assertIn("sign_agreement", s)
+            self.assertIn("narrow_hits", s)
+            self.assertIn("n_overlap", s)
+        whole = draft["evaluation"]["whole"]
+        self.assertEqual(whole["n_overlap"], 60)
+        ch = draft["changes_vs_candidate"]
+        self.assertTrue(ch["available"])
+        self.assertEqual(ch["candidate_offset"], self.best_offset)
+        self.assertIn("correlation", ch["delta"])
+        self.assertIn("narrow_hits_added", ch["delta"])
+        # false ring has no year; inserted gap has one
+        roles = {m["seq"]: m["role"] for m in draft["mapping"]
+                 if m["seq"] is not None}
+        self.assertEqual(roles[35], "false_ring")
+        inserted = [m for m in draft["mapping"]
+                    if m["role"] == "inserted_missing"]
+        self.assertEqual(len(inserted), 1)
+        self.assertEqual(inserted[0]["year"], self.best_offset + 20)
+
+    def test_preview_versions(self):
+        st, draft, _ = self._create(
+            [{"type": "missing_ring", "after_seq": 20}])
+        did = draft["draft_id"]
+        st, v2, _ = self.request(
+            f"/api/corrections/{did}/versions", "POST",
+            body={"events": [{"type": "missing_ring", "after_seq": 25},
+                             {"type": "false_ring", "seq": 40}]})
+        self.assertEqual(st, 201)
+        self.assertEqual(v2["version"], 2)
+        st, prev, _ = self.request(
+            f"/api/corrections/{did}/preview", version=2)
+        self.assertEqual(st, 200)
+        self.assertEqual(prev["version"], 2)
+        self.assertEqual(len(prev["evaluation"]["segments"]), 3)
+        st, prev1, _ = self.request(
+            f"/api/corrections/{did}/preview", version=1)
+        self.assertEqual(len(prev1["evaluation"]["segments"]), 2)
+
+    def test_list_and_get_draft(self):
+        st, draft, _ = self._create(
+            [{"type": "missing_ring", "after_seq": 10}])
+        did = draft["draft_id"]
+        st, lst, _ = self.request("/api/corrections",
+                                  sample_id="UNKNOWN_01")
+        self.assertEqual(st, 200)
+        self.assertEqual(len(lst["corrections"]), 1)
+        self.assertEqual(lst["corrections"][0]["draft_id"], did)
+        st, one, _ = self.request(f"/api/corrections/{did}")
+        self.assertEqual(st, 200)
+        self.assertEqual(one["sample_id"], "UNKNOWN_01")
+        st, _, _ = self.request("/api/corrections/999")
+        self.assertEqual(st, 404)
+
+    # -- validation rejections ---------------------------------------------
+    def test_reject_duplicate_events(self):
+        st, body, _ = self._create(
+            [{"type": "false_ring", "seq": 10},
+             {"type": "false_ring", "seq": 10}])
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_EVENT_DUPLICATE")
+        self.assertEqual(body["errors"][0]["seq"], 10)
+
+    def test_reject_order_contradiction(self):
+        st, body, _ = self._create(
+            [{"type": "false_ring", "seq": 30},
+             {"type": "missing_ring", "after_seq": 10}])
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_EVENT_ORDER")
+
+    def test_reject_out_of_range(self):
+        st, body, _ = self._create([{"type": "false_ring", "seq": 999}])
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_EVENT_RANGE")
+        self.assertEqual(body["errors"][0]["seq"], 999)
+        st, body, _ = self._create(
+            [{"type": "missing_ring", "after_seq": 61}])
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_EVENT_RANGE")
+
+    def test_reject_event_vs_recorded_missing(self):
+        # A01 has a recorded missing ring at seq 3
+        csv_text = ("sample_id,unit,start_year,year,width,missing\n"
+                    "M1,mm,1950,,1.1,0\nM1,,,,1.0,0\nM1,,,,0,1\n"
+                    "M1,,,,1.2,0\nM1,,,,1.3,0\n")
+        self.request("/api/series", "POST", raw=csv_text, ctype="text/csv")
+        st, body, _ = self.request(
+            "/api/corrections", "POST",
+            body={"sample_id": "M1", "offset": 1950,
+                  "events": [{"type": "false_ring", "seq": 3}]})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_EVENT_VS_MISSING")
+        self.assertEqual(body["errors"][0]["seq"], 3)
+
+    def test_reject_event_vs_explicit_year(self):
+        # SITE_A01 has explicit years (known_start 1901): any gap shifts them
+        st, body, _ = self.request(
+            "/api/corrections", "POST",
+            body={"sample_id": "SITE_A01", "offset": 1901,
+                  "events": [{"type": "missing_ring", "after_seq": 10}]})
+        self.assertEqual(st, 422)
+        codes = {e["code"] for e in body["errors"]}
+        self.assertEqual(codes, {"E_EVENT_VS_YEAR"})
+        self.assertEqual(body["errors"][0]["seq"], 11)
+
+    def test_reject_segment_too_short_on_adopt(self):
+        st, draft, _ = self._create(
+            [{"type": "false_ring", "seq": 30}], min_overlap=40)
+        did = draft["draft_id"]
+        st, body, _ = self.request(
+            f"/api/corrections/{did}/adopt", "POST",
+            body={"hypothesis": "H1"})
+        self.assertEqual(st, 422)
+        err = body["errors"][0]
+        self.assertEqual(err["code"], "E_SEGMENT_TOO_SHORT")
+        self.assertIn("seq", err)
+        self.assertIn("segment", err)
+
+    # -- adopt / revoke ----------------------------------------------------
+    def test_adopt_enters_hypothesis_and_master(self):
+        st, draft, _ = self._create(
+            [{"type": "missing_ring", "after_seq": 20},
+             {"type": "false_ring", "seq": 35}])
+        did = draft["draft_id"]
+        st, ad, _ = self.request(
+            f"/api/corrections/{did}/adopt", "POST",
+            body={"hypothesis": "H1"})
+        self.assertEqual(st, 200, ad)
+        self.assertEqual(ad["status"], "adopted")
+        st, chrono, _ = self.request("/api/hypotheses/H1/chronology")
+        self.assertEqual(chrono["corrected_samples"], ["UNKNOWN_01"])
+        self.assertEqual(chrono["correction_drafts"]["UNKNOWN_01"], [did])
+        st, master, _ = self.request("/api/master", hypothesis="H1")
+        member = [m for m in master["meta"]["members"]
+                  if m["sample_id"] == "UNKNOWN_01"][0]
+        self.assertTrue(member["corrected"])
+        # double adoption rejected
+        st, body, _ = self.request(
+            f"/api/corrections/{did}/adopt", "POST",
+            body={"hypothesis": "H1"})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_DRAFT_ADOPTED")
+
+    def test_adopt_then_revoke_restores(self):
+        st, draft, _ = self._create(
+            [{"type": "missing_ring", "after_seq": 20}])
+        did = draft["draft_id"]
+        self.request(f"/api/corrections/{did}/adopt", "POST",
+                     body={"hypothesis": "H1"})
+        st, rv, _ = self.request(f"/api/corrections/{did}/revoke",
+                                 "POST", body={})
+        self.assertEqual(st, 200)
+        self.assertEqual(rv["status"], "revoked")
+        st, chrono, _ = self.request("/api/hypotheses/H1/chronology")
+        self.assertEqual(chrono["corrected_samples"], [])
+        # revoke again -> 422
+        st, body, _ = self.request(f"/api/corrections/{did}/revoke",
+                                   "POST", body={})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_DRAFT_NOT_ADOPTED")
+
+    def test_original_series_untouched(self):
+        st, before, _ = self.request("/api/series/UNKNOWN_01")
+        st, draft, _ = self._create(
+            [{"type": "missing_ring", "after_seq": 20},
+             {"type": "false_ring", "seq": 35}])
+        did = draft["draft_id"]
+        self.request(f"/api/corrections/{did}/adopt", "POST",
+                     body={"hypothesis": "H1"})
+        st, after, _ = self.request("/api/series/UNKNOWN_01")
+        self.assertEqual(before["rings"], after["rings"])
+        self.assertEqual(before["raw_payload"], after["raw_payload"])
+        self.assertEqual(before["known_start"], after["known_start"])
+
+    # -- versions / compare / download -------------------------------------
+    def test_compare_versions(self):
+        st, draft, _ = self._create(
+            [{"type": "missing_ring", "after_seq": 20}])
+        did = draft["draft_id"]
+        self.request(f"/api/corrections/{did}/versions", "POST",
+                     body={"events": [{"type": "missing_ring",
+                                       "after_seq": 25}]})
+        st, cmp_, _ = self.request(f"/api/corrections/{did}/compare",
+                                   a=1, b=2)
+        self.assertEqual(st, 200)
+        self.assertEqual(len(cmp_["events_added"]), 1)
+        self.assertEqual(len(cmp_["events_removed"]), 1)
+        self.assertIn("correlation", cmp_["delta"])
+        self.assertEqual(cmp_["version_a"], 1)
+        self.assertEqual(cmp_["version_b"], 2)
+
+    def test_download_report(self):
+        st, draft, _ = self._create(
+            [{"type": "missing_ring", "after_seq": 20}])
+        did = draft["draft_id"]
+        st, report, hdr = self.request(f"/api/corrections/{did}/download")
+        self.assertEqual(st, 200)
+        self.assertIn("attachment", hdr["Content-Disposition"])
+        self.assertEqual(report["report_type"],
+                         "tree_ring_correction_draft")
+        self.assertEqual(report["draft"]["run_id"], self.run_id)
+        self.assertIn("reference_snapshot", report)
+        self.assertTrue(report["reference_snapshot"]["years"])
+        self.assertEqual(len(report["versions"]), 1)
+        json.dumps(report, allow_nan=False)
+
+    def test_help_and_openapi_advertise_corrections(self):
+        st, help_, _ = self.request("/api/help")
+        paths = {e["path"] for e in help_["endpoints"]}
+        self.assertIn("/api/corrections", paths)
+        self.assertIn("/api/corrections/{id}/adopt", paths)
+        st, spec, _ = self.request("/api/openapi.json")
+        self.assertIn("/api/corrections", spec["paths"])
+        self.assertIn("/api/corrections/{id}/adopt", spec["paths"])
+        self.assertIn("CorrectionEvent",
+                      spec["components"]["schemas"])
+
+
 class TestDocs(unittest.TestCase):
     def test_openapi_is_self_describing(self):
         from tree_ring_xdate.docs import OPENAPI, HTML_DOCS

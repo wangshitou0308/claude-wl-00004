@@ -31,6 +31,10 @@ OPENAPI = json.loads(r"""
       "description": "定年假设与锁定"
     },
     {
+      "name": "corrections",
+      "description": "缺失环/伪环校正草案"
+    },
+    {
       "name": "chronology",
       "description": "主年表与统计"
     }
@@ -269,6 +273,329 @@ OPENAPI = json.loads(r"""
         "responses": {
           "200": {
             "description": "runs"
+          }
+        }
+      }
+    },
+    "/api/corrections": {
+      "post": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "从滑动候选偏移创建校正草案（缺失环/伪环事件），返回分段试算",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionDraft"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "草案已创建（含分段映射、各段与全序列统计、相对原候选的变化）"
+          },
+          "404": {
+            "description": "样本或运行候选不存在"
+          },
+          "422": {
+            "description": "事件校验失败（重复/次序/越界/与已标缺失环或显式年份冲突），errors 逐条定位测量序号"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "列出校正草案（?sample_id= 过滤）",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "草案列表"
+          }
+        }
+      }
+    },
+    "/api/corrections/{id}": {
+      "get": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "草案最新版本及分段试算（?version=N 查看指定版本）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "草案版本 + 分段映射 + 评估"
+          },
+          "404": {
+            "description": "草案或版本不存在"
+          }
+        }
+      }
+    },
+    "/api/corrections/{id}/preview": {
+      "get": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "按事件重建分段年份映射，重算各段及全序列重叠区间、Pearson、符号一致率、共同极窄环，并列出相对原候选的变化",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "分段试算结果（evaluation.segments / evaluation.whole / changes_vs_candidate）"
+          }
+        }
+      }
+    },
+    "/api/corrections/{id}/versions": {
+      "get": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "草案全部版本",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "版本列表"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "替换事件列表生成新版本（采用中的草案也可准备替代版本，live 映射仍钉在已采用版本）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/CorrectionEvent"
+                    }
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "新版本已创建"
+          },
+          "422": {
+            "description": "事件校验失败"
+          }
+        }
+      }
+    },
+    "/api/corrections/{id}/adopt": {
+      "post": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "采用草案：分段映射写入指定假设并进入主年表；任一有效分段不足 min_overlap 时 422 拒绝并定位测量序号",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "hypothesis": {
+                    "type": "string",
+                    "default": "default"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "description": "缺省采用最新版本"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已采用（返回分段评估）"
+          },
+          "422": {
+            "description": "分段不足最小重叠（E_SEGMENT_TOO_SHORT）或草案已采用"
+          }
+        }
+      }
+    },
+    "/api/corrections/{id}/revoke": {
+      "post": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "撤销采用，样本恢复原 placement",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已撤销"
+          },
+          "422": {
+            "description": "草案未处于采用状态"
+          }
+        }
+      }
+    },
+    "/api/corrections/{id}/compare": {
+      "get": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "比较两个草案版本的事件与统计差异（?a=1&b=2）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "a",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "b",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "事件增删 + 全序列统计差值 + 分段对比"
+          }
+        }
+      }
+    },
+    "/api/corrections/{id}/download": {
+      "get": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "草案完整 JSON 导出（来源运行、参照快照、全部版本与评估；?download=0 取消附件头）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "download",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON 报告（Content-Disposition 附件）"
           }
         }
       }
@@ -631,6 +958,83 @@ OPENAPI = json.loads(r"""
   },
   "components": {
     "schemas": {
+      "CorrectionEvent": {
+        "type": "object",
+        "description": "校正事件。missing_ring：在测量序号 after_seq 之后插入 years 个缺失日历年（after_seq=0 表示首测量之前）；false_ring：把测量 seq 标为不参与定年的伪环（保留宽度，不分配日历年）。",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "missing_ring",
+              "false_ring"
+            ]
+          },
+          "after_seq": {
+            "type": "integer",
+            "description": "missing_ring 专用：在此测量序号之后插入缺失年（0..n）"
+          },
+          "years": {
+            "type": "integer",
+            "default": 1,
+            "description": "missing_ring 专用：插入的缺失日历年个数（1..100）"
+          },
+          "seq": {
+            "type": "integer",
+            "description": "false_ring 专用：伪环测量序号（1..n）"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "CorrectionDraft": {
+        "type": "object",
+        "description": "校正草案创建请求。offset 为第 1 个测量对应的日历年（通常取一次滑动匹配的候选偏移，run_id 用于关联来源运行并做相对变化对比）。",
+        "properties": {
+          "sample_id": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string",
+            "default": "master"
+          },
+          "hypothesis": {
+            "type": "string"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "default": 20
+          },
+          "narrow_z": {
+            "type": "number",
+            "default": -1.0
+          },
+          "narrow_q": {
+            "type": "number",
+            "default": 0.1
+          },
+          "note": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CorrectionEvent"
+            }
+          }
+        },
+        "required": [
+          "sample_id",
+          "offset",
+          "events"
+        ]
+      },
       "Payload": {
         "type": "object",
         "description": "单样本对象或 {\"samples\": [...]} 批量。CSV 表头列名支持中英别名：sample_id/sample/样本编号, unit/单位, start_year/起始年份, year/年份, width/宽度, missing/缺失环。",
@@ -816,7 +1220,46 @@ start_year，年表与主年表也一律采用锁定的 offset，旧起始年被
 两者不一致时年表返回 <code>LOCK_VS_KNOWN</code> 冲突（含 known_start、locked_offset、
 shift 年数）。offset 与已知起始年相同则不产生冲突。</div>
 
-<h2>5. 年表统计与标记 <span class="tag">GET /api/hypotheses/{name}/chronology</span></h2>
+<h2>5. 校正草案：缺失环与伪环 <span class="tag">POST /api/corrections</span></h2>
+<p>从一次滑动匹配的候选偏移出发，实验员可以声明两类<b>校正事件</b>来修正测量序列与真实生长之间的偏差：</p>
+<table>
+<tr><th>事件</th><th>含义</th><th>参数</th></tr>
+<tr><td><code>missing_ring</code></td>
+<td>漏记的缺失环：在测量序号 <code>after_seq</code> 之后插入 <code>years</code> 个缺失日历年
+（<code>after_seq=0</code> 表示首测量之前；宽度记 0，参与对比）</td>
+<td>after_seq（0..n）、years（默认 1）</td></tr>
+<tr><td><code>false_ring</code></td>
+<td>误记的伪环：测量 <code>seq</code> 不对应真实日历年，<b>不参与定年</b>
+（宽度保留，不分配日历年，不进入相关与主年表）</td>
+<td>seq（1..n）</td></tr></table>
+<pre>curl -X POST localhost:8000/api/corrections -d '{
+  "sample_id":"UNKNOWN_01","offset":1948,"run_id":1,"min_overlap":20,
+  "events":[{"type":"missing_ring","after_seq":20},
+            {"type":"false_ring","seq":35}]}'</pre>
+<p>系统按事件重建<b>分段年份映射</b>（事件把序列切成若干段），分别重算各段及全序列的
+重叠区间、Pearson 相关、符号一致率和共同极窄环，并在
+<code>changes_vs_candidate</code> 中列出相对原候选的变化。草案、来源运行与
+<b>参照快照</b>（创建时冻结的参照年表）都持久化在 SQLite 中。</p>
+<table>
+<tr><th>操作</th><th>请求</th></tr>
+<tr><td>创建草案</td><td>POST /api/corrections（body 见上）</td></tr>
+<tr><td>草案列表</td><td>GET /api/corrections?sample_id=UNKNOWN_01</td></tr>
+<tr><td>草案详情/预览</td><td>GET /api/corrections/1 或 /api/corrections/1/preview?version=2</td></tr>
+<tr><td>新版本</td><td>POST /api/corrections/1/versions {"events":[...]}</td></tr>
+<tr><td>版本比较</td><td>GET /api/corrections/1/compare?a=1&amp;b=2</td></tr>
+<tr><td>采用</td><td>POST /api/corrections/1/adopt {"hypothesis":"H1","version":2}</td></tr>
+<tr><td>撤销</td><td>POST /api/corrections/1/revoke</td></tr>
+<tr><td>JSON 导出</td><td>GET /api/corrections/1/download</td></tr></table>
+<div class="note"><b>采用校验</b>：事件重复（E_EVENT_DUPLICATE）、次序矛盾
+（E_EVENT_ORDER）、超出样本范围（E_EVENT_RANGE）、与已标缺失环冲突
+（E_EVENT_VS_MISSING）、与显式年份冲突（E_EVENT_VS_YEAR）时创建即 422 拒绝并
+定位测量序号；采用时若任一有效分段不足 min_overlap（E_SEGMENT_TOO_SHORT）同样
+422 拒绝并给出受影响测量序号。采用后的分段映射进入指定假设与主年表计算
+（chronology 的 <code>corrected_samples</code> 可见），原始宽度、年份与
+raw_payload 保持不变；撤销后恢复原 placement。分数接近的校正可并存为多个版本，
+系统不自动认定缺失环或伪环。</div>
+
+<h2>6. 年表统计与标记 <span class="tag">GET /api/hypotheses/{name}/chronology</span></h2>
 <p>逐年给出 n_samples、mean_index、median_index、stdev_index、mad：</p>
 <ul>
 <li><b>LOW_COVERAGE</b>：该年样本数 &lt; min_samples（默认 3）。</li>
@@ -835,7 +1278,15 @@ leave-one-out 相关低于 weak_correlation（默认 0.3）。</li>
 <tr><td>当前主年表</td><td>GET /api/master?hypothesis=H1</td></tr>
 <tr><td>历史滑动结果</td><td>GET /api/runs</td></tr></table>
 
-<h2>7. cURL 速览</h2>
+<h2>7. 报告与主年表</h2>
+<table>
+<tr><td>下载 JSON 报告</td>
+<td>GET /api/hypotheses/H1/report?download=1</td></tr>
+<tr><td>在线报告</td><td>GET /api/hypotheses/H1/report</td></tr>
+<tr><td>当前主年表</td><td>GET /api/master?hypothesis=H1</td></tr>
+<tr><td>历史滑动结果</td><td>GET /api/runs</td></tr></table>
+
+<h2>8. cURL 速览</h2>
 <pre>curl -X POST localhost:8000/api/series \\
   -H 'Content-Type: text/csv' --data-binary @examples/samples.csv
 curl -X POST localhost:8000/api/hypotheses -d '{"name":"H1"}'
@@ -843,6 +1294,11 @@ curl -X POST localhost:8000/api/crossdate \\
   -d '{"sample_id":"UNKNOWN_01","reference":"SITE_A","min_overlap":30}'
 curl -X POST localhost:8000/api/hypotheses/H1/locks \\
   -d '{"sample_id":"UNKNOWN_01","offset":1952}'
+curl -X POST localhost:8000/api/corrections \\
+  -d '{"sample_id":"UNKNOWN_01","offset":1948,"run_id":1,
+       "events":[{"type":"missing_ring","after_seq":20},
+                 {"type":"false_ring","seq":35}]}'
+curl -X POST localhost:8000/api/corrections/1/adopt -d '{"hypothesis":"H1"}'
 curl 'localhost:8000/api/hypotheses/H1/report?download=1' -o report.json</pre>
 </body></html>
 """

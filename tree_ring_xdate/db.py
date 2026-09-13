@@ -9,6 +9,9 @@ runs           one cross-dating calculation (sample x reference x params)
 candidates     candidate offsets produced by a run
 hypotheses     named dating hypotheses (sets of locked placements)
 locks          (hypothesis, sample) -> locked offset/start year
+corrections    correction drafts (missing/false ring events), versioned
+correction_events  event list of one draft version
+correction_map adopted year mapping (hypothesis, sample, seq) -> year
 """
 
 from __future__ import annotations
@@ -94,6 +97,54 @@ CREATE TABLE IF NOT EXISTS locks (
 
 CREATE INDEX IF NOT EXISTS idx_rings_series ON rings(series_id);
 CREATE INDEX IF NOT EXISTS idx_locks_hyp ON locks(hypothesis_id);
+
+CREATE TABLE IF NOT EXISTS corrections (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    sample_id           TEXT NOT NULL,
+    offset              INTEGER NOT NULL,   -- calendar year of ring 1
+    run_id              INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+    reference           TEXT NOT NULL DEFAULT 'master',
+    hypothesis          TEXT,               -- reference hypothesis context
+    min_overlap         INTEGER NOT NULL DEFAULT 20,
+    narrow_z            REAL NOT NULL DEFAULT -1.0,
+    narrow_q            REAL NOT NULL DEFAULT 0.1,
+    note                TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL DEFAULT 'draft',
+                                        -- draft | adopted | revoked
+    adopted_hypothesis  TEXT,
+    adopted_version     INTEGER,
+    latest_version      INTEGER NOT NULL DEFAULT 1,
+    snapshot            TEXT NOT NULL,      -- JSON reference snapshot
+    candidate           TEXT,               -- JSON source candidate stats
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS correction_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    draft_id    INTEGER NOT NULL REFERENCES corrections(id) ON DELETE CASCADE,
+    version     INTEGER NOT NULL,
+    events      TEXT NOT NULL,              -- JSON event list
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    UNIQUE(draft_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS correction_map (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    hypothesis_id   INTEGER NOT NULL REFERENCES hypotheses(id) ON DELETE CASCADE,
+    sample_id       TEXT NOT NULL,
+    seq             INTEGER,                -- NULL: inserted missing year
+    year            INTEGER NOT NULL,
+    width           REAL NOT NULL,
+    role            TEXT NOT NULL,          -- ring | missing | inserted_missing
+    draft_id        INTEGER NOT NULL REFERENCES corrections(id) ON DELETE CASCADE,
+    draft_version   INTEGER NOT NULL,
+    UNIQUE(hypothesis_id, sample_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_corr_events ON correction_events(draft_id);
+CREATE INDEX IF NOT EXISTS idx_corr_map ON correction_map(hypothesis_id);
 """
 
 
@@ -395,3 +446,200 @@ def locks_of(conn: sqlite3.Connection, hypothesis: str) -> dict[str, int]:
         (h["id"],),
     ).fetchall()
     return {r["sample_id"]: r["offset"] for r in rows}
+
+
+def get_candidate(conn: sqlite3.Connection, run_id: int,
+                  offset: int) -> dict | None:
+    """One stored candidate of a sliding run (for draft provenance)."""
+    r = conn.execute(
+        "SELECT * FROM candidates WHERE run_id = ? AND offset = ?",
+        (run_id, offset),
+    ).fetchone()
+    if r is None:
+        return None
+    d = dict(r)
+    d["narrow_hits"] = json.loads(d["narrow_hits"])
+    return d
+
+
+# ---------------------------------------------------------------------------
+# Correction drafts
+# ---------------------------------------------------------------------------
+
+def save_correction(conn: sqlite3.Connection, *, sample_id: str, offset: int,
+                    events: list[dict], run_id, reference: str,
+                    hypothesis: str | None, min_overlap: int,
+                    narrow_z: float, narrow_q: float, note: str,
+                    snapshot: dict, candidate: dict | None) -> int:
+    """Persist a new correction draft together with its first version."""
+    ts = now_iso()
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO corrections (sample_id, offset, run_id, reference,
+                   hypothesis, min_overlap, narrow_z, narrow_q, note, status,
+                   latest_version, snapshot, candidate, created_at,
+                   updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (sample_id, int(offset), run_id, reference, hypothesis,
+             int(min_overlap), float(narrow_z), float(narrow_q), note,
+             "draft", 1, json.dumps(snapshot, ensure_ascii=False),
+             json.dumps(candidate, ensure_ascii=False)
+             if candidate is not None else None, ts, ts),
+        )
+        draft_id = cur.lastrowid
+        conn.execute(
+            """INSERT INTO correction_events (draft_id, version, events,
+                   note, created_at)
+               VALUES (?,?,?,?,?)""",
+            (draft_id, 1, json.dumps(events, ensure_ascii=False), note, ts),
+        )
+    return draft_id
+
+
+def save_correction_version(conn: sqlite3.Connection, draft_id: int, *,
+                            events: list[dict], note: str = "") -> int:
+    """Append a new event-list version; returns the new version number."""
+    ts = now_iso()
+    with conn:
+        row = conn.execute(
+            "SELECT latest_version FROM corrections WHERE id = ?",
+            (draft_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"correction draft not found: {draft_id}")
+        version = row["latest_version"] + 1
+        conn.execute(
+            """INSERT INTO correction_events (draft_id, version, events,
+                   note, created_at)
+               VALUES (?,?,?,?,?)""",
+            (draft_id, version, json.dumps(events, ensure_ascii=False),
+             note, ts),
+        )
+        conn.execute(
+            "UPDATE corrections SET latest_version = ?, updated_at = ? "
+            "WHERE id = ?", (version, ts, draft_id),
+        )
+    return version
+
+
+def _correction_head(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["draft_id"] = d.pop("id")
+    d["snapshot"] = json.loads(d["snapshot"])
+    d["candidate"] = (json.loads(d["candidate"])
+                      if d["candidate"] else None)
+    return d
+
+
+def get_correction(conn: sqlite3.Connection, draft_id: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM corrections WHERE id = ?", (draft_id,),
+    ).fetchone()
+    return _correction_head(row) if row else None
+
+
+def list_corrections(conn: sqlite3.Connection,
+                     sample_id: str | None = None) -> list[dict]:
+    sql = "SELECT * FROM corrections"
+    args: tuple = ()
+    if sample_id:
+        sql += " WHERE sample_id = ?"
+        args = (sample_id,)
+    sql += " ORDER BY id DESC"
+    return [_correction_head(r) for r in conn.execute(sql, args)]
+
+
+def get_correction_version(conn: sqlite3.Connection, draft_id: int,
+                           version: int) -> dict | None:
+    head = get_correction(conn, draft_id)
+    if head is None:
+        return None
+    row = conn.execute(
+        "SELECT * FROM correction_events WHERE draft_id = ? AND version = ?",
+        (draft_id, version),
+    ).fetchone()
+    if row is None:
+        return None
+    out = dict(head)
+    out["version"] = version
+    out["events"] = json.loads(row["events"])
+    out["note"] = row["note"]
+    out["created_at"] = row["created_at"]
+    return out
+
+
+def mark_correction_status(conn: sqlite3.Connection, draft_id: int,
+                           status: str, *, hypothesis: str | None = None,
+                           adopted_version: int | None = None) -> None:
+    ts = now_iso()
+    with conn:
+        if status == "adopted":
+            conn.execute(
+                """UPDATE corrections SET status = ?, adopted_hypothesis = ?,
+                       adopted_version = ?, updated_at = ? WHERE id = ?""",
+                (status, hypothesis, adopted_version, ts, draft_id),
+            )
+        else:
+            conn.execute(
+                """UPDATE corrections SET status = ?, adopted_hypothesis = NULL,
+                       adopted_version = NULL, updated_at = ? WHERE id = ?""",
+                (status, ts, draft_id),
+            )
+
+
+def save_correction_mapping(conn: sqlite3.Connection, draft_id: int,
+                            version: int, mapping: list[dict],
+                            hypothesis: str | None = None) -> None:
+    """Store the adopted year mapping and expose it to chronology queries.
+
+    ``hypothesis`` falls back to the draft's adopted hypothesis recorded
+    by :func:`mark_correction_status` (call order: mark first, or pass the
+    name explicitly).
+    """
+    head = get_correction(conn, draft_id)
+    hyp_name = hypothesis or (head or {}).get("adopted_hypothesis")
+    h = get_hypothesis(conn, hyp_name, with_locks=False)
+    if h is None:
+        raise KeyError(f"hypothesis not found: {hyp_name}")
+    sample_id = head["sample_id"]
+    with conn:
+        conn.execute(
+            "DELETE FROM correction_map WHERE hypothesis_id = ? "
+            "AND sample_id = ?", (h["id"], sample_id),
+        )
+        conn.executemany(
+            """INSERT INTO correction_map (hypothesis_id, sample_id, seq,
+                   year, width, role, draft_id, draft_version)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            [
+                (h["id"], sample_id, m["seq"], m["year"], m["width"],
+                 m["role"], draft_id, version)
+                for m in mapping if m["year"] is not None
+            ],
+        )
+
+
+def clear_correction_mapping(conn: sqlite3.Connection,
+                             draft_id: int) -> None:
+    with conn:
+        conn.execute(
+            "DELETE FROM correction_map WHERE draft_id = ?", (draft_id,),
+        )
+
+
+def correction_maps_of(conn: sqlite3.Connection,
+                       hypothesis: str) -> dict[str, list[dict]]:
+    """Adopted correction mappings of one hypothesis: sample -> rows."""
+    h = get_hypothesis(conn, hypothesis, with_locks=False)
+    if h is None:
+        return {}
+    rows = conn.execute(
+        """SELECT sample_id, seq, year, width, role, draft_id, draft_version
+           FROM correction_map WHERE hypothesis_id = ?
+           ORDER BY sample_id, year""",
+        (h["id"],),
+    ).fetchall()
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r["sample_id"], []).append(dict(r))
+    return out

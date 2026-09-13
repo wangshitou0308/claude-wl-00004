@@ -34,27 +34,38 @@ def placed_year_widths(series: dict, offset: int | None) -> dict[int, float]:
     return {offset + r["seq"] - 1: r["width"] for r in series["rings"]}
 
 
+def corrected_year_widths(corr_rows: list[dict]) -> dict[int, float]:
+    """Year -> width from an adopted correction mapping."""
+    return {r["year"]: r["width"] for r in corr_rows}
+
+
 def resolve_placements(conn, hypothesis: str | None = None
                        ) -> tuple[dict[str, int], dict[str, int | None],
-                                  dict[str, int]]:
-    """Return ``(placements, known_starts, locks)`` for every series.
+                                  dict[str, int], dict[str, list[dict]]]:
+    """Return ``(placements, known_starts, locks, correction_maps)``.
 
     A lock in ``hypothesis`` always wins over the ingested known start --
     a re-dating decision must never be silently ignored.  Samples with
-    neither are left out (undated and unlocked).
+    neither are left out (undated and unlocked).  Samples with an adopted
+    correction draft in this hypothesis appear in ``correction_maps``
+    (their segmented year mapping replaces the dense offset placement).
     """
     locks = db.locks_of(conn, hypothesis) if hypothesis else {}
+    corr_maps = (db.correction_maps_of(conn, hypothesis)
+                 if hypothesis else {})
     placements: dict[str, int] = {}
     known: dict[str, int | None] = {}
     for s in db.list_series(conn):
         sid = s["sample_id"]
         full = db.get_series(conn, sid)
         known[sid] = full["known_start"]
-        if sid in locks:
+        if sid in corr_maps:
+            placements[sid] = min(r["year"] for r in corr_maps[sid])
+        elif sid in locks:
             placements[sid] = locks[sid]
         elif full["known_start"] is not None:
             placements[sid] = full["known_start"]
-    return placements, known, locks
+    return placements, known, locks, corr_maps
 
 
 def known_start_conflicts(known: dict[str, int | None],
@@ -93,40 +104,53 @@ def build_reference(conn, reference: str,
         if s is None:
             raise KeyError(f"reference series not found: {reference}")
         # A lock, when present, wins over the ingested known start so a
-        # re-dated sample can itself serve as the reference.
+        # re-dated sample can itself serve as the reference.  An adopted
+        # correction mapping wins over both (segmented placement).
+        corr = (db.correction_maps_of(conn, hypothesis).get(reference)
+                if hypothesis else None)
         locked = (db.locks_of(conn, hypothesis).get(reference)
                   if hypothesis else None)
-        if locked is not None:
+        if corr:
+            yw = corrected_year_widths(corr)
+            offset = min(yw)
+        elif locked is not None:
             offset = locked
+            yw = placed_year_widths(s, offset)
         elif s["known_start"] is not None:
             offset = s["known_start"]
+            yw = placed_year_widths(s, offset)
         else:
             raise ValueError(
                 f"reference series {reference!r} is not dated and has no "
                 f"lock in hypothesis {hypothesis!r}")
-        yw = placed_year_widths(s, offset)
         meta = {"type": "series", "sample_id": reference,
                 "unit": s["unit"], "start": min(yw), "end": max(yw),
                 "n_years": len(yw), "offset": offset,
                 "known_start": s["known_start"],
-                "hypothesis": hypothesis}
+                "hypothesis": hypothesis,
+                "corrected": bool(corr)}
         if (s["known_start"] is not None
                 and locked is not None and locked != s["known_start"]):
             meta["known_start_conflicts"] = known_start_conflicts(
                 {reference: s["known_start"]}, {reference: locked})
         return yw, meta
 
-    placements, known, locks = resolve_placements(conn, hypothesis)
+    placements, known, locks, corr_maps = resolve_placements(conn,
+                                                             hypothesis)
     years, per_year = set(), defaultdict(list)
     members = []
     for sid, off in placements.items():
         s = db.get_series(conn, sid)
-        yw = placed_year_widths(s, off)
+        if sid in corr_maps:
+            yw = corrected_year_widths(corr_maps[sid])
+        else:
+            yw = placed_year_widths(s, off)
         positives = [w for w in yw.values() if w > 0]
         if len(positives) < 3:
             continue
         mean_w = statistics.fmean(positives)
-        members.append({"sample_id": sid, "start": min(yw), "end": max(yw)})
+        members.append({"sample_id": sid, "start": min(yw), "end": max(yw),
+                        "corrected": sid in corr_maps})
         for y, w in yw.items():
             per_year[y].append(w / mean_w if w > 0 else 0.0)
             years.add(y)
@@ -344,13 +368,17 @@ def build_chronology(conn, hypothesis: str | None = None, *,
                         sample correlates weakly with all the others
                         (leave-one-out over the common interval)
     """
-    placements, known, locks = resolve_placements(conn, hypothesis)
+    placements, known, locks, corr_maps = resolve_placements(conn,
+                                                             hypothesis)
     per_year = defaultdict(list)   # year -> [(sid, index)]
     sample_yw = {}
     units = defaultdict(set)
     for sid, off in placements.items():
         s = db.get_series(conn, sid)
-        yw = placed_year_widths(s, off)
+        if sid in corr_maps:
+            yw = corrected_year_widths(corr_maps[sid])
+        else:
+            yw = placed_year_widths(s, off)
         sample_yw[sid] = yw
         positives = [w for w in yw.values() if w > 0]
         if len(positives) < 3:
@@ -408,6 +436,10 @@ def build_chronology(conn, hypothesis: str | None = None, *,
         "n_samples": len(sample_yw),
         "placements": placements,
         "known_starts": known,
+        "corrected_samples": sorted(corr_maps),
+        "correction_drafts": {
+            sid: sorted({r["draft_id"] for r in corr_maps[sid]})
+            for sid in sorted(corr_maps)},
         "yearly": yearly,
         "outliers": outliers,
         "unit_mismatches": unit_mismatches,
