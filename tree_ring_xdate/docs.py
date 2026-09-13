@@ -35,6 +35,10 @@ OPENAPI = json.loads(r"""
       "description": "缺失环/伪环校正草案"
     },
     {
+      "name": "stability",
+      "description": "已定年结果的局部稳定性检查"
+    },
+    {
       "name": "chronology",
       "description": "主年表与统计"
     }
@@ -600,6 +604,202 @@ OPENAPI = json.loads(r"""
         }
       }
     },
+    "/api/stability": {
+      "post": {
+        "tags": [
+          "stability"
+        ],
+        "summary": "发起局部稳定性检查：按采用后的年份映射切重叠窗口，各窗口在当前位置两侧滑动比对",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StabilityCheck"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "检查完成（逐窗口 best_shift、并列偏移、统计量与疑似错位标记）"
+          },
+          "404": {
+            "description": "假设不存在，或样本在该假设中无锁定/校正映射"
+          },
+          "422": {
+            "description": "参数越界（E_PARAM）或假设内无可检查样本（E_NO_TARGETS）"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "stability"
+        ],
+        "summary": "列出检查作业（?hypothesis=&sample_id= 过滤）",
+        "parameters": [
+          {
+            "name": "hypothesis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sample_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "检查列表（不含窗口明细）"
+          }
+        }
+      }
+    },
+    "/api/stability/{id}": {
+      "get": {
+        "tags": [
+          "stability"
+        ],
+        "summary": "检查详情；窗口可按年份、偏移与状态筛选；参照/映射失效只说明依据",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "year_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "只保留与该年及之后相交的窗口"
+          },
+          {
+            "name": "year_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "只保留与该年及之前相交的窗口"
+          },
+          {
+            "name": "shift",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "按窗口最佳偏移 best_shift 精确筛选（0=当前位置）"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "insufficient_coverage"
+              ]
+            }
+          },
+          {
+            "name": "sample_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "检查详情（windows/flags/reference_status/mapping_status）"
+          },
+          "404": {
+            "description": "检查不存在"
+          }
+        }
+      }
+    },
+    "/api/stability/compare": {
+      "get": {
+        "tags": [
+          "stability"
+        ],
+        "summary": "比较两次检查：参数差异、共有窗口 best_shift 变化、标记新增与消失（?a=&b=）",
+        "parameters": [
+          {
+            "name": "a",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "b",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "两次检查的差异"
+          },
+          "404": {
+            "description": "任一检查不存在"
+          }
+        }
+      }
+    },
+    "/api/stability/{id}/download": {
+      "get": {
+        "tags": [
+          "stability"
+        ],
+        "summary": "检查完整 JSON 导出（参数、样本映射、参照快照、全部窗口与标记；?download=0 取消附件头）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "download",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON 报告（Content-Disposition 附件）"
+          }
+        }
+      }
+    },
     "/api/hypotheses": {
       "get": {
         "tags": [
@@ -1035,8 +1235,70 @@ OPENAPI = json.loads(r"""
           "events"
         ]
       },
-      "Payload": {
+      "StabilityCheck": {
         "type": "object",
+        "description": "局部稳定性检查请求。针对假设中已锁定（或已采用校正）的样本：按采用后的年份映射切出 window 年、步长 step 的重叠窗口，缺失年保留零宽参与统计、伪环不参与；每个窗口在当前位置 ±search_radius 内与参照（master 或指定样本）滑动比对，列出各偏移的 Pearson 相关、符号一致率与共同极窄环，分数接近（tolerance 内）的偏移并列保留；相邻窗口连续 run_threshold 个偏向同一非零位移时标出疑似错位区间与测量序号。检查只读：覆盖不足或参照版本失效时只说明依据，不改锁定或校正草案。",
+        "properties": {
+          "hypothesis": {
+            "type": "string",
+            "description": "要检查的定年假设（必填）"
+          },
+          "sample_id": {
+            "type": "string",
+            "description": "缺省检查假设中全部已锁定/已校正样本"
+          },
+          "reference": {
+            "type": "string",
+            "default": "master",
+            "description": "master 或某个已定年样本编号"
+          },
+          "window": {
+            "type": "integer",
+            "default": 30,
+            "description": "窗口长度（年，>=5）"
+          },
+          "step": {
+            "type": "integer",
+            "default": 10,
+            "description": "相邻窗口起点步长（年，>=1）"
+          },
+          "min_valid_years": {
+            "type": "integer",
+            "default": 15,
+            "description": "窗口最少有效年数（3..window），不足则该窗口标记 insufficient_coverage"
+          },
+          "run_threshold": {
+            "type": "integer",
+            "default": 3,
+            "description": "触发疑似错位标记所需的连续窗口数（>=2）"
+          },
+          "search_radius": {
+            "type": "integer",
+            "default": 3,
+            "description": "当前位置两侧的搜索范围（±年，1..25）"
+          },
+          "tolerance": {
+            "type": "number",
+            "default": 0.05,
+            "description": "与最高相关差值在容差内的偏移并列保留"
+          },
+          "narrow_z": {
+            "type": "number",
+            "default": -1.0
+          },
+          "narrow_q": {
+            "type": "number",
+            "default": 0.1
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hypothesis"
+        ]
+      },
+      "Payload": {        "type": "object",
         "description": "单样本对象或 {\"samples\": [...]} 批量。CSV 表头列名支持中英别名：sample_id/sample/样本编号, unit/单位, start_year/起始年份, year/年份, width/宽度, missing/缺失环。",
         "properties": {
           "sample_id": {
@@ -1270,7 +1532,37 @@ raw_payload 保持不变；撤销后恢复原 placement。分数接近的校正�
 leave-one-out 相关低于 weak_correlation（默认 0.3）。</li>
 </ul>
 
-<h2>6. 报告与主年表</h2>
+<h2>7. 局部稳定性检查 <span class="tag">POST /api/stability</span></h2>
+<p>已定年结果在<b>局部区间</b>是否仍然稳定？针对某个假设中<b>已锁定的样本</b>（或已采用校正的
+样本）发起检查；不指定 <code>sample_id</code> 时检查假设中全部已锁定/已校正样本。</p>
+<pre>curl -X POST localhost:8000/api/stability -d '{
+  "hypothesis":"H1","sample_id":"UNKNOWN_01","reference":"master",
+  "window":30,"step":10,"min_valid_years":15,
+  "run_threshold":3,"search_radius":3,"tolerance":0.05}'</pre>
+<p>系统按<b>采用后的年份映射</b>（锁定 offset 或已采用校正草案的分段映射）切出
+<code>window</code> 年、步长 <code>step</code> 的重叠窗口：<b>缺失年保留零宽</b>参与统计，
+<b>伪环不参与</b>（无日历年）。每个窗口在当前位置 <code>±search_radius</code> 年内与参照
+（<code>master</code> 或指定样本）滑动比对，逐偏移列出 Pearson 相关、符号一致率与共同极窄环；
+与最高相关差值在 <code>tolerance</code> 内的偏移<b>并列保留</b>（<code>tied_shifts</code>）。
+窗口有效年数不足 <code>min_valid_years</code> 时标记
+<code>insufficient_coverage</code> 并说明依据，不做比对。</p>
+<p>相邻窗口连续 <code>run_threshold</code> 个偏向<b>同一非零位移</b>时，在
+<code>flags</code> 中标出疑似错位区间（起止年份）与涉及的<b>测量序号</b>
+（<code>seq_start..seq_end</code>）。shift=+d 表示该区间应整体向晚年方向移动 d 年。</p>
+<table>
+<tr><th>操作</th><th>请求</th></tr>
+<tr><td>创建检查</td><td>POST /api/stability（body 见上）</td></tr>
+<tr><td>检查列表</td><td>GET /api/stability?hypothesis=H1</td></tr>
+<tr><td>检查详情/窗口筛选</td>
+<td>GET /api/stability/1?year_from=1960&amp;year_to=1990&amp;shift=-2&amp;status=ok&amp;sample_id=UNKNOWN_01</td></tr>
+<tr><td>两次检查比较</td><td>GET /api/stability/compare?a=1&amp;b=2</td></tr>
+<tr><td>JSON 导出</td><td>GET /api/stability/1/download</td></tr></table>
+<div class="note"><b>只读保证</b>：检查作业把参数、样本映射与<b>参照快照</b>一并存入 SQLite，
+之后复查可还原依据；若创建后锁定或校正发生变化，详情中的
+<code>reference_status</code> / <code>mapping_status</code> 只给出 stale 说明（结果仍按创建时
+快照评分），<b>不修改任何锁定或校正草案</b>。覆盖不足同样只说明依据。</div>
+
+<h2>8. 报告与主年表</h2>
 <table>
 <tr><td>下载 JSON 报告</td>
 <td>GET /api/hypotheses/H1/report?download=1</td></tr>
@@ -1278,15 +1570,7 @@ leave-one-out 相关低于 weak_correlation（默认 0.3）。</li>
 <tr><td>当前主年表</td><td>GET /api/master?hypothesis=H1</td></tr>
 <tr><td>历史滑动结果</td><td>GET /api/runs</td></tr></table>
 
-<h2>7. 报告与主年表</h2>
-<table>
-<tr><td>下载 JSON 报告</td>
-<td>GET /api/hypotheses/H1/report?download=1</td></tr>
-<tr><td>在线报告</td><td>GET /api/hypotheses/H1/report</td></tr>
-<tr><td>当前主年表</td><td>GET /api/master?hypothesis=H1</td></tr>
-<tr><td>历史滑动结果</td><td>GET /api/runs</td></tr></table>
-
-<h2>8. cURL 速览</h2>
+<h2>9. cURL 速览</h2>
 <pre>curl -X POST localhost:8000/api/series \\
   -H 'Content-Type: text/csv' --data-binary @examples/samples.csv
 curl -X POST localhost:8000/api/hypotheses -d '{"name":"H1"}'
@@ -1299,6 +1583,11 @@ curl -X POST localhost:8000/api/corrections \\
        "events":[{"type":"missing_ring","after_seq":20},
                  {"type":"false_ring","seq":35}]}'
 curl -X POST localhost:8000/api/corrections/1/adopt -d '{"hypothesis":"H1"}'
+curl -X POST localhost:8000/api/stability \\
+  -d '{"hypothesis":"H1","sample_id":"UNKNOWN_01",
+       "window":30,"step":10,"run_threshold":3,"search_radius":3}'
+curl 'localhost:8000/api/stability/1?shift=-2&amp;status=ok'
+curl 'localhost:8000/api/stability/compare?a=1&amp;b=2'
 curl 'localhost:8000/api/hypotheses/H1/report?download=1' -o report.json</pre>
 </body></html>
 """

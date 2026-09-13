@@ -16,7 +16,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import analysis, corrections, db, validate
+from . import analysis, corrections, db, stability, validate
 from .docs import OPENAPI, HTML_DOCS
 
 DEFAULT_HYPOTHESIS = "default"
@@ -161,6 +161,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(e.status, e.body)
         except corrections.CorrectionError as e:
             self._send(422, {"error": {"code": "CORRECTION_REJECTED",
+                                       "message": str(e)},
+                             "errors": e.errors})
+        except stability.StabilityError as e:
+            self._send(422, {"error": {"code": "STABILITY_REJECTED",
                                        "message": str(e)},
                              "errors": e.errors})
         except KeyError as e:
@@ -522,6 +526,68 @@ class Handler(BaseHTTPRequestHandler):
                    download_name=(f"correction_{did}.json"
                                   if download else None))
 
+    # -- stability checks --------------------------------------------------
+    def ep_stability_create(self, query):
+        body = self._json_body()
+        hypothesis = body.get("hypothesis") or query.get("hypothesis")
+        if not hypothesis:
+            raise ApiError(400, "MISSING_PARAM",
+                           "hypothesis is required")
+        sample_id = body.get("sample_id", query.get("sample_id")) or None
+        result = stability.create_check(
+            self.conn, hypothesis=hypothesis, sample_id=sample_id,
+            reference=body.get("reference",
+                               query.get("reference", "master")),
+            window=int(body.get("window", query.get("window", 30))),
+            step=int(body.get("step", query.get("step", 10))),
+            min_valid_years=int(body.get(
+                "min_valid_years", query.get("min_valid_years", 15))),
+            run_threshold=int(body.get(
+                "run_threshold", query.get("run_threshold", 3))),
+            search_radius=int(body.get(
+                "search_radius", query.get("search_radius", 3))),
+            tolerance=float(body.get("tolerance",
+                                     query.get("tolerance", 0.05))),
+            narrow_z=float(body.get("narrow_z",
+                                    query.get("narrow_z", -1.0))),
+            narrow_q=float(body.get("narrow_q",
+                                    query.get("narrow_q", 0.1))),
+            note=body.get("note", ""))
+        self._send(201, result)
+
+    def ep_stability_list(self, query):
+        self._send(200, {"checks": db.list_stability_checks(
+            self.conn, hypothesis=query.get("hypothesis"),
+            sample_id=query.get("sample_id"))})
+
+    def ep_stability_get(self, query, cid):
+        filters = {}
+        for k in ("year_from", "year_to", "shift"):
+            v = query.get(k)
+            if v not in (None, ""):
+                filters[k] = int(v)
+        if query.get("status"):
+            filters["status"] = query["status"]
+        if query.get("sample_id"):
+            filters["sample_id"] = query["sample_id"]
+        self._send(200, stability.check_detail(self.conn, int(cid),
+                                               filters=filters))
+
+    def ep_stability_compare(self, query):
+        a, b = query.get("a"), query.get("b")
+        if not a or not b:
+            raise ApiError(400, "MISSING_PARAM",
+                           "query parameters 'a' and 'b' (check ids) are "
+                           "required")
+        self._send(200, stability.compare_checks(self.conn, int(a), int(b)))
+
+    def ep_stability_download(self, query, cid):
+        report = stability.check_report(self.conn, int(cid))
+        download = query.get("download", "1").lower() in ("1", "true")
+        self._send(200, report,
+                   download_name=(f"stability_{cid}.json"
+                                  if download else None))
+
 
 # ---------------------------------------------------------------------------
 # Routing table
@@ -583,6 +649,11 @@ _ROUTES = [
     ({"POST"},   "/api/corrections/{did}/revoke",      Handler.ep_correction_revoke),
     ({"GET"},    "/api/corrections/{did}/compare",     Handler.ep_correction_compare),
     ({"GET"},    "/api/corrections/{did}/download",    Handler.ep_correction_download),
+    ({"POST"},   "/api/stability",                     Handler.ep_stability_create),
+    ({"GET"},    "/api/stability",                     Handler.ep_stability_list),
+    ({"GET"},    "/api/stability/compare",             Handler.ep_stability_compare),
+    ({"GET"},    "/api/stability/{cid}",               Handler.ep_stability_get),
+    ({"GET"},    "/api/stability/{cid}/download",      Handler.ep_stability_download),
 ]
 
 _ENDPOINT_HELP = [
@@ -634,6 +705,16 @@ _ENDPOINT_HELP = [
      "description": "比较两个草案版本的事件与统计差异"},
     {"method": "GET", "path": "/api/corrections/{id}/download",
      "description": "草案完整 JSON 导出（含来源运行、参照快照与全部版本）"},
+    {"method": "POST", "path": "/api/stability",
+     "description": "对已锁定样本或整个假设发起局部稳定性检查：按采用后的年份映射切重叠窗口（缺失年零宽参与、伪环不参与），各窗口在当前位置 ±search_radius 内与参照滑动比对；参数 window/step/min_valid_years/run_threshold/search_radius/tolerance 均可调"},
+    {"method": "GET", "path": "/api/stability",
+     "description": "列出检查作业（可按 hypothesis、sample_id 过滤）"},
+    {"method": "GET", "path": "/api/stability/{id}",
+     "description": "检查详情：逐窗口 best_shift、并列偏移、Pearson/符号一致率/共同极窄环与疑似错位标记；支持 ?year_from=&year_to=&shift=&status=&sample_id= 筛选窗口；参照或样本映射在创建后发生变化时只给出 stale 说明，不改锁定或校正草案"},
+    {"method": "GET", "path": "/api/stability/compare?a=&b=",
+     "description": "比较两次检查：参数差异、共有窗口 best_shift 变化、疑似错位标记的新增与消失"},
+    {"method": "GET", "path": "/api/stability/{id}/download",
+     "description": "检查完整 JSON 导出（参数、样本映射、参照快照、全部窗口与标记；?download=0 取消附件头）"},
     {"method": "GET", "path": "/api/master",
      "description": "当前主年表（逐年平均指数）"},
     {"method": "GET", "path": "/api/openapi.json",

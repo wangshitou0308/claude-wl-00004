@@ -12,6 +12,9 @@ locks          (hypothesis, sample) -> locked offset/start year
 corrections    correction drafts (missing/false ring events), versioned
 correction_events  event list of one draft version
 correction_map adopted year mapping (hypothesis, sample, seq) -> year
+stability_checks local stability-check jobs: parameters, adopted sample
+                 mappings, frozen reference snapshot, per-window results
+                 and misplacement flags (all as JSON evidence)
 """
 
 from __future__ import annotations
@@ -145,6 +148,22 @@ CREATE TABLE IF NOT EXISTS correction_map (
 
 CREATE INDEX IF NOT EXISTS idx_corr_events ON correction_events(draft_id);
 CREATE INDEX IF NOT EXISTS idx_corr_map ON correction_map(hypothesis_id);
+
+CREATE TABLE IF NOT EXISTS stability_checks (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    hypothesis      TEXT NOT NULL,        -- hypothesis whose placements are checked
+    sample_id       TEXT,                 -- NULL: every placed sample
+    reference       TEXT NOT NULL DEFAULT 'master',
+    params          TEXT NOT NULL,        -- JSON window/step/thresholds
+    note            TEXT NOT NULL DEFAULT '',
+    snapshot        TEXT NOT NULL,        -- JSON frozen reference
+    sample_maps     TEXT NOT NULL,        -- JSON adopted year mappings used
+    windows         TEXT NOT NULL,        -- JSON per-window results
+    flags           TEXT NOT NULL,        -- JSON suspected-misplacement flags
+    created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_stab_hyp ON stability_checks(hypothesis);
 """
 
 
@@ -642,4 +661,73 @@ def correction_maps_of(conn: sqlite3.Connection,
     out: dict[str, list[dict]] = {}
     for r in rows:
         out.setdefault(r["sample_id"], []).append(dict(r))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Stability checks
+# ---------------------------------------------------------------------------
+
+def save_stability_check(conn: sqlite3.Connection, *, hypothesis: str,
+                         sample_id: str | None, reference: str,
+                         params: dict, note: str, snapshot: dict,
+                         sample_maps: dict, windows: list[dict],
+                         flags: list[dict]) -> int:
+    """Persist one stability-check job together with all its evidence."""
+    ts = now_iso()
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO stability_checks (hypothesis, sample_id, reference,
+                   params, note, snapshot, sample_maps, windows, flags,
+                   created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (hypothesis, sample_id, reference,
+             json.dumps(params, ensure_ascii=False), note,
+             json.dumps(snapshot, ensure_ascii=False),
+             json.dumps(sample_maps, ensure_ascii=False),
+             json.dumps(windows, ensure_ascii=False),
+             json.dumps(flags, ensure_ascii=False), ts),
+        )
+        return cur.lastrowid
+
+
+def _stability_row(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["check_id"] = d.pop("id")
+    for k in ("params", "snapshot", "sample_maps", "windows", "flags"):
+        d[k] = json.loads(d[k])
+    return d
+
+
+def get_stability_check(conn: sqlite3.Connection,
+                        check_id: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM stability_checks WHERE id = ?", (check_id,),
+    ).fetchone()
+    return _stability_row(row) if row else None
+
+
+def list_stability_checks(conn: sqlite3.Connection,
+                          hypothesis: str | None = None,
+                          sample_id: str | None = None) -> list[dict]:
+    """Lightweight check list (bulky evidence columns are summarised)."""
+    sql = "SELECT * FROM stability_checks"
+    cond, args = [], []
+    if hypothesis:
+        cond.append("hypothesis = ?")
+        args.append(hypothesis)
+    if sample_id:
+        cond.append("(sample_id = ? OR sample_id IS NULL)")
+        args.append(sample_id)
+    if cond:
+        sql += " WHERE " + " AND ".join(cond)
+    sql += " ORDER BY id DESC"
+    out = []
+    for r in conn.execute(sql, args):
+        d = _stability_row(r)
+        d["n_windows"] = len(d["windows"])
+        d["n_flags"] = len(d["flags"])
+        for k in ("snapshot", "sample_maps", "windows", "flags"):
+            d.pop(k)
+        out.append(d)
     return out

@@ -849,6 +849,293 @@ class TestCorrections(ServerTestBase):
                       spec["components"]["schemas"])
 
 
+class TestStability(ServerTestBase):
+    """Local stability checks of already-locked placements."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(EXAMPLES, "samples.csv"),
+                  encoding="utf-8") as f:
+            cls.csv = f.read()
+
+    def setUp(self):
+        super().setUp()
+        st, body, _ = self.request("/api/series", "POST", raw=self.csv,
+                                   ctype="text/csv")
+        self.assertEqual(st, 201, body)
+        self.request("/api/hypotheses", "POST", body={"name": "H1"})
+
+    def _lock(self, offset, sid="UNKNOWN_01", hyp="H1"):
+        return self.request(f"/api/hypotheses/{hyp}/locks", "POST",
+                            body={"sample_id": sid, "offset": offset})
+
+    def _check(self, **kw):
+        body = {"hypothesis": "H1", "sample_id": "UNKNOWN_01",
+                "window": 20, "step": 10, "min_valid_years": 10,
+                "run_threshold": 2, "search_radius": 4}
+        body.update(kw)
+        return self.request("/api/stability", "POST", body=body)
+
+    # -- creation / flags --------------------------------------------------
+    def test_misplaced_lock_is_flagged_with_measurement_seqs(self):
+        self._lock(1950)   # true start is 1948: locked two years too late
+        st, chk, _ = self._check()
+        self.assertEqual(st, 201, chk)
+        self.assertEqual(chk["hypothesis"], "H1")
+        self.assertEqual(chk["sample_id"], "UNKNOWN_01")
+        self.assertEqual(chk["params"]["window"], 20)
+        self.assertTrue(chk["read_only"])
+        self.assertFalse(chk["reference_status"]["stale"])
+        # every window favours moving the series 2 years back
+        shifts = [w["best_shift"] for w in chk["windows"]]
+        self.assertEqual(shifts, [-2] * len(shifts))
+        for w in chk["windows"]:
+            self.assertEqual(w["status"], "ok")
+            self.assertIn(-2, w["tied_shifts"])
+            self.assertEqual(len(w["candidates"]), 9)   # ±4 around 0
+            cur = w["current"]
+            self.assertEqual(cur["shift"], 0)
+            self.assertIsNotNone(cur["correlation"])
+            self.assertIn("sign_agreement", cur)
+            self.assertIn("narrow_hits", cur)
+            self.assertIn("n_narrow_hits", cur)
+        # one flag spanning the whole series, localised by seq
+        self.assertEqual(len(chk["flags"]), 1)
+        fl = chk["flags"][0]
+        self.assertEqual(fl["shift"], -2)
+        self.assertEqual(fl["start_year"], 1950)
+        self.assertEqual(fl["seq_start"], 1)
+        self.assertEqual(fl["seq_end"], 60)
+        self.assertIn("UNKNOWN_01", fl["message"])
+
+    def test_correct_lock_is_stable(self):
+        self._lock(1948)
+        st, chk, _ = self._check()
+        self.assertEqual(st, 201, chk)
+        self.assertEqual(chk["n_flags"], 0)
+        self.assertEqual(chk["flags"], [])
+        self.assertEqual([w["best_shift"] for w in chk["windows"]],
+                         [0] * len(chk["windows"]))
+
+    def test_whole_hypothesis_check(self):
+        self._lock(1948)
+        self._lock(1901, sid="SITE_A01")   # matches its known start
+        st, chk, _ = self._check(sample_id=None)
+        self.assertEqual(st, 201, chk)
+        self.assertIsNone(chk["sample_id"])
+        self.assertEqual(chk["targets"], ["SITE_A01", "UNKNOWN_01"])
+        sids = {w["sample_id"] for w in chk["windows"]}
+        self.assertEqual(sids, {"SITE_A01", "UNKNOWN_01"})
+        self.assertEqual(chk["n_flags"], 0)
+        # per-sample window filter
+        st, d, _ = self.request(f"/api/stability/{chk['check_id']}",
+                                sample_id="SITE_A01")
+        self.assertTrue(d["windows"])
+        self.assertTrue(all(w["sample_id"] == "SITE_A01"
+                            for w in d["windows"]))
+
+    def test_correction_mapping_is_checked(self):
+        # adopt a correction draft, then check the corrected placement
+        st, cd, _ = self.request(
+            "/api/crossdate", "POST",
+            body={"sample_id": "UNKNOWN_01", "offset_min": 1900,
+                  "offset_max": 1990, "min_overlap": 30})
+        offset = cd["candidates"][0]["offset"]
+        st, draft, _ = self.request(
+            "/api/corrections", "POST",
+            body={"sample_id": "UNKNOWN_01", "offset": offset,
+                  "run_id": cd["run_id"], "min_overlap": 10,
+                  "events": [{"type": "missing_ring", "after_seq": 20},
+                             {"type": "false_ring", "seq": 35}]})
+        did = draft["draft_id"]
+        self.request(f"/api/corrections/{did}/adopt", "POST",
+                     body={"hypothesis": "H1"})
+        st, chk, _ = self._check()
+        self.assertEqual(st, 201, chk)
+        ms = chk["mapping_status"]["UNKNOWN_01"]
+        self.assertEqual(ms["placement"], "correction")
+        self.assertFalse(ms["stale"])
+        # exported mapping: 60 rings - 1 false ring + 1 inserted gap
+        st, report, _ = self.request(
+            f"/api/stability/{chk['check_id']}/download")
+        mapping = report["sample_maps"]["UNKNOWN_01"]["mapping"]
+        self.assertEqual(len(mapping), 60)
+        roles = [m["role"] for m in mapping]
+        self.assertEqual(roles.count("inserted_missing"), 1)
+        self.assertNotIn("false_ring", roles)
+        # inserted missing year keeps zero width and participates
+        ins = [m for m in mapping if m["role"] == "inserted_missing"][0]
+        self.assertEqual(ins["width"], 0.0)
+        self.assertEqual(ins["year"], offset + 20)
+
+    # -- insufficient coverage / staleness: explain only -------------------
+    def test_insufficient_coverage_only_explains(self):
+        self._lock(1948)
+        st, chk, _ = self._check(window=25, min_valid_years=20)
+        self.assertEqual(st, 201, chk)
+        short = [w for w in chk["windows"]
+                 if w["status"] == "insufficient_coverage"]
+        self.assertTrue(short)
+        for w in short:
+            self.assertLess(w["n_valid"], 20)
+            self.assertIn("min_valid_years", w["reason"])
+            self.assertEqual(w["candidates"], [])
+            self.assertIsNone(w["best_shift"])
+        # the lock was not touched
+        st, h, _ = self.request("/api/hypotheses/H1")
+        self.assertEqual(h["locks"][0]["offset"], 1948)
+
+    def test_stale_reference_only_explains(self):
+        self._lock(1948)
+        st, chk, _ = self._check()
+        cid = chk["check_id"]
+        self.assertFalse(chk["reference_status"]["stale"])
+        # moving another sample changes the master chronology
+        self._lock(1920, sid="SITE_A01")
+        st, d, _ = self.request(f"/api/stability/{cid}")
+        self.assertTrue(d["reference_status"]["stale"])
+        self.assertIn("snapshot", d["reference_status"]["reason"])
+        # the check only explains: both locks stay as the experimenter set
+        st, h, _ = self.request("/api/hypotheses/H1")
+        locks = {l["sample_id"]: l["offset"] for l in h["locks"]}
+        self.assertEqual(locks["SITE_A01"], 1920)
+        self.assertEqual(locks["UNKNOWN_01"], 1948)
+
+    def test_check_never_mutates_state(self):
+        self._lock(1950)
+        st, before_h, _ = self.request("/api/hypotheses/H1")
+        st, before_corr, _ = self.request("/api/corrections")
+        st, before_series, _ = self.request("/api/series/UNKNOWN_01")
+        st, chk, _ = self._check()
+        self.assertTrue(chk["flags"])   # the check did find something
+        st, after_h, _ = self.request("/api/hypotheses/H1")
+        st, after_corr, _ = self.request("/api/corrections")
+        st, after_series, _ = self.request("/api/series/UNKNOWN_01")
+        self.assertEqual(before_h["locks"], after_h["locks"])
+        self.assertEqual(before_corr, after_corr)
+        self.assertEqual(before_series["rings"], after_series["rings"])
+        self.assertEqual(before_series["raw_payload"],
+                         after_series["raw_payload"])
+
+    # -- filters -------------------------------------------------------------
+    def test_window_filters(self):
+        self._lock(1950)
+        st, chk, _ = self._check()
+        cid = chk["check_id"]
+        # by shift
+        st, d, _ = self.request(f"/api/stability/{cid}", shift=-2)
+        self.assertEqual(st, 200)
+        self.assertTrue(d["windows"])
+        self.assertTrue(all(w["best_shift"] == -2 for w in d["windows"]))
+        self.assertEqual(d["filters"]["shift"], -2)
+        # by year range: windows intersecting 1950..1969
+        st, d, _ = self.request(f"/api/stability/{cid}",
+                                year_from=1950, year_to=1969)
+        self.assertEqual(len(d["windows"]), 2)
+        self.assertTrue(all(w["start_year"] <= 1969
+                            and w["end_year"] >= 1950
+                            for w in d["windows"]))
+        # by status
+        st, d, _ = self.request(f"/api/stability/{cid}", status="ok")
+        self.assertTrue(all(w["status"] == "ok" for w in d["windows"]))
+        st, d, _ = self.request(f"/api/stability/{cid}",
+                                status="insufficient_coverage")
+        self.assertEqual(d["windows"], [])
+
+    # -- validation / not found ---------------------------------------------
+    def test_param_validation_422(self):
+        self._lock(1948)
+        for kw in ({"window": 3}, {"window": 20, "min_valid_years": 25},
+                   {"run_threshold": 1}, {"search_radius": 0},
+                   {"step": 0}):
+            st, body, _ = self._check(**kw)
+            self.assertEqual(st, 422, kw)
+            self.assertEqual(body["errors"][0]["code"], "E_PARAM")
+            self.assertIn("param", body["errors"][0])
+
+    def test_not_found_and_missing_param(self):
+        st, _, _ = self.request("/api/stability", "POST", body={})
+        self.assertEqual(st, 400)
+        st, _, _ = self.request("/api/stability", "POST",
+                                body={"hypothesis": "GHOST"})
+        self.assertEqual(st, 404)
+        # sample exists but is not locked in H1
+        st, _, _ = self._check()
+        self.assertEqual(st, 404)
+        st, _, _ = self.request("/api/stability/999")
+        self.assertEqual(st, 404)
+
+    def test_no_targets_422(self):
+        self.request("/api/hypotheses", "POST", body={"name": "EMPTY"})
+        st, body, _ = self.request("/api/stability", "POST",
+                                   body={"hypothesis": "EMPTY"})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_NO_TARGETS")
+
+    # -- list / compare / download ------------------------------------------
+    def test_list_checks(self):
+        self._lock(1948)
+        self._check()
+        self._check(note="second pass")
+        st, lst, _ = self.request("/api/stability", hypothesis="H1")
+        self.assertEqual(st, 200)
+        self.assertEqual(len(lst["checks"]), 2)
+        self.assertEqual(lst["checks"][0]["note"], "second pass")
+        self.assertIn("n_windows", lst["checks"][0])
+        self.assertNotIn("windows", lst["checks"][0])   # list stays light
+        st, lst, _ = self.request("/api/stability", hypothesis="OTHER")
+        self.assertEqual(lst["checks"], [])
+
+    def test_compare_two_checks(self):
+        self._lock(1950)
+        st, a, _ = self._check()
+        self._lock(1948)   # experimenter fixes the lock
+        st, b, _ = self._check()
+        st, cmp_, _ = self.request("/api/stability/compare",
+                                   a=a["check_id"], b=b["check_id"])
+        self.assertEqual(st, 200)
+        self.assertEqual(cmp_["check_a"], a["check_id"])
+        self.assertEqual(cmp_["check_b"], b["check_id"])
+        self.assertEqual(cmp_["param_diff"], {})
+        self.assertEqual(cmp_["n_windows_a"], a["n_windows"])
+        self.assertEqual(len(cmp_["flags_only_in_a"]), 1)
+        self.assertEqual(cmp_["flags_only_in_a"][0]["shift"], -2)
+        self.assertEqual(cmp_["flags_only_in_b"], [])
+        st, _, _ = self.request("/api/stability/compare",
+                                a=a["check_id"], b=999)
+        self.assertEqual(st, 404)
+
+    def test_download_report(self):
+        self._lock(1950)
+        st, chk, _ = self._check()
+        cid = chk["check_id"]
+        st, report, hdr = self.request(f"/api/stability/{cid}/download")
+        self.assertEqual(st, 200)
+        self.assertIn("attachment", hdr["Content-Disposition"])
+        self.assertEqual(report["report_type"], "tree_ring_stability_check")
+        self.assertEqual(report["check"]["check_id"], cid)
+        self.assertTrue(report["reference_snapshot"]["years"])
+        self.assertIn("UNKNOWN_01", report["sample_maps"])
+        self.assertEqual(len(report["windows"]), chk["n_windows"])
+        self.assertEqual(len(report["flags"]), 1)
+        json.dumps(report, allow_nan=False)   # NaN-free export
+        st, _, hdr = self.request(f"/api/stability/{cid}/download",
+                                  download=0)
+        self.assertNotIn("Content-Disposition", hdr)
+
+    def test_help_and_openapi_advertise_stability(self):
+        st, help_, _ = self.request("/api/help")
+        paths = {e["path"] for e in help_["endpoints"]}
+        self.assertIn("/api/stability", paths)
+        self.assertIn("/api/stability/{id}", paths)
+        st, spec, _ = self.request("/api/openapi.json")
+        self.assertIn("/api/stability", spec["paths"])
+        self.assertIn("/api/stability/{id}", spec["paths"])
+        self.assertIn("/api/stability/compare", spec["paths"])
+        self.assertIn("/api/stability/{id}/download", spec["paths"])
+        self.assertIn("StabilityCheck", spec["components"]["schemas"])
+
+
 class TestDocs(unittest.TestCase):
     def test_openapi_is_self_describing(self):
         from tree_ring_xdate.docs import OPENAPI, HTML_DOCS

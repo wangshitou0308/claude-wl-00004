@@ -11,6 +11,8 @@ Modules:
                    chronology statistics and conflict detection
     corrections -- missing-ring / false-ring correction drafts
                    (segmented year mapping, preview, adopt, revoke)
+    stability   -- local stability checks of locked placements
+                   (sliding windows, misplacement flags, read-only)
     server      -- http.server based HTTP API
     cli         -- command line entry point (``python -m tree_ring_xdate``)
 """
