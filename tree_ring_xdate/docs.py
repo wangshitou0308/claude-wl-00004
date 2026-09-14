@@ -1039,7 +1039,7 @@ OPENAPI = json.loads(r"""
         "tags": [
           "signal"
         ],
-        "summary": "采用连续 EPS 达标窗口为可靠区间（completed→adopted）；未达阈值的区间不得采用",
+        "summary": "采用连续 EPS 达标窗口为可靠区间（completed→adopted，一次性不可变）；未达阈值的区间不得采用，已采用后再次调用被拒绝",
         "parameters": [
           {
             "name": "id",
@@ -1076,7 +1076,7 @@ OPENAPI = json.loads(r"""
             "description": "评估不存在"
           },
           "422": {
-            "description": "仍是 draft（E_SIGNAL_DRAFT）、无达标窗口（E_NO_RELIABLE_RANGE）、含未达标窗口（E_WINDOW_BELOW_THRESHOLD）或窗口不相邻（E_WINDOWS_NOT_CONSECUTIVE）"
+            "description": "仍是 draft（E_SIGNAL_DRAFT）、已采用且不可再改（E_SIGNAL_ALREADY_ADOPTED）、已停用（E_SIGNAL_RETIRED）、无达标窗口（E_NO_RELIABLE_RANGE）、含未达标窗口（E_WINDOW_BELOW_THRESHOLD）或窗口不相邻（E_WINDOWS_NOT_CONSECUTIVE）"
           }
         }
       }
@@ -2216,7 +2216,7 @@ OPENAPI = json.loads(r"""
       },
       "SignalAssessment": {
         "type": "object",
-        "description": "年表信号强度评估请求。创建即冻结定年假设、可选已采用标准化版本、样本集合与窗口参数；逐窗在成员共同年份上计算样本深度、样本对 Pearson、Rbar（有效配对相关的均值，配对需至少 min_pair_years 个共同年份且双方非零方差）与 EPS=N·R̄/(N·R̄+1−R̄)（N 为窗口平均样本深度），列出参与样本、有效配对数与全部公式输入；再逐个剔除样本重算 Rbar/EPS 差值（jackknife，仅提示，绝不自动排除任何序列）。覆盖不足、无有效配对或 EPS 无法计算的窗口只返回依据（insufficient_coverage/no_valid_pairs/eps_incalculable）。作业按 draft→completed→adopted→retired 流转：只有 completed 才能 adopt，采用连续 EPS 达标窗口作为可靠区间；来源假设/校正/标准化版本变化只把旧评估标记为 stale，不重算。",
+        "description": "年表信号强度评估请求。创建即冻结定年假设、可选已采用标准化版本、样本集合与窗口参数；逐窗仅在<b>该窗口年份范围内</b>的成员共同年份上计算样本深度、样本对 Pearson、Rbar（有效配对相关的均值；配对在窗口内需至少 min_pair_years 个共同年份且双方非零方差，绝不跨窗口用整段共同年份）与 EPS=N·R̄/(N·R̄+1−R̄)（N 为窗口平均样本深度），列出参与样本、有效配对数与全部公式输入；再逐个剔除样本重算 Rbar/EPS 差值（jackknife，仅提示，绝不自动排除任何序列）。覆盖不足、无有效配对或 EPS 无法计算的窗口只返回依据（insufficient_coverage/no_valid_pairs/eps_incalculable）。作业按 draft→completed→adopted→retired 流转：只有 completed 才能 adopt，采用连续 EPS 达标窗口作为可靠区间；采用是一次性不可变操作，再次 adopt 返回 E_SIGNAL_ALREADY_ADOPTED；来源假设/校正/标准化版本变化只把旧评估标记为 stale，不重算。",
         "properties": {
           "name": {
             "type": "string",
@@ -2672,7 +2672,7 @@ leave-one-out 相关低于 weak_correlation（默认 0.3）。</li>
 <table>
 <tr><th>量</th><th>含义</th></tr>
 <tr><td>样本深度 depth</td><td>逐年覆盖样本数，窗口给出 max_depth、mean_depth 与逐年 depth_inputs</td></tr>
-<tr><td>样本对相关</td><td>每对成员在共同年份上的 Pearson；共同年份 &lt; min_pair_years 或任一方零方差时
+<tr><td>样本对相关</td><td>每对成员在<b>仅属于该窗口年份范围</b>内的共同年份上的 Pearson（绝不跨窗口取整段共同年份）；窗口内共同年份 &lt; min_pair_years 或任一方零方差时
 记为<b>无效配对</b>并说明原因（相关仍作为依据列出，但不喂给 Rbar）</td></tr>
 <tr><td>Rbar（R̄）</td><td>有效配对相关的算术平均（n_valid_pairs 个）</td></tr>
 <tr><td>EPS</td><td><code>N·R̄ / (N·R̄ + 1 − R̄)</code>，N 为窗口平均样本深度；分母非正时 eps_incalculable</td></tr></table>
@@ -2696,7 +2696,9 @@ leave-one-out 相关低于 weak_correlation（默认 0.3）。</li>
 <code>{"windows":[2,3,4]}</code> 指定<b>相邻且全部达标</b>的窗口下标；缺省取最长连续达标段，自动给出
 <code>reliable_span</code>（窗口下标 + 起止日历年）。未达 <code>eps_threshold</code> 的窗口永远不得采用
 （<code>E_WINDOW_BELOW_THRESHOLD</code>）；不存在任何达标窗口时 422（<code>E_NO_RELIABLE_RANGE</code>）。
-仍是 draft 不能采用（<code>E_SIGNAL_DRAFT</code>，先 complete）。</p>
+仍是 draft 不能采用（<code>E_SIGNAL_DRAFT</code>，先 complete）。<b>采用是一次性不可变操作</b>：一旦 adopted，
+可靠区间与版本号即固定，再次调用 adopt（即使 windows 不同）返回
+<code>E_SIGNAL_ALREADY_ADOPTED</code>，原区间不变；要更换区间须新建评估并停用旧评估。</p>
 <p><b>已采用评估限制下游参照</b>：主年表、滑动匹配（及年表/报告）可带
 <code>signal_id</code>（别名 <code>signal_assessment</code>）指定一个 adopted 评估版本——参照只取该评估的
 <b>冻结成员指数</b>并把年份限制在 <code>reliable_span</code> 内，候选的重叠区间不会越出可靠范围；

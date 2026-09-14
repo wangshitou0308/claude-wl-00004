@@ -1963,6 +1963,81 @@ class TestSignalAssessments(ServerTestBase):
             f"/api/signal/{a['assessment_id']}/download", download=0)
         self.assertNotIn("Content-Disposition", hdr)
 
+    def test_pair_correlation_uses_only_years_inside_window(self):
+        # three custom series whose pair directions REVERSE halfway: in the
+        # first 5-year window all pairs point together, in the second window
+        # one member reverses (two of three pairs flip sign).  A full-10-year
+        # correlation would average the two halves and hide the weak tail.
+        csv_text = ("sample_id,unit,start_year,year,width,missing\n"
+                    + "".join(
+                        f"{sid},mm,1950,,{vals[0]},0\n"
+                        + "".join(f",,,,{v},0\n" for v in vals[1:])
+                        for sid, vals in (
+                            ("P01", [1, 2, 3, 4, 5, 1, 2, 3, 4, 5]),
+                            ("P02", [1, 2, 3, 4, 5, 5, 4, 3, 2, 1]),
+                            ("P03", [1, 2, 3, 4, 5, 1, 2, 3, 4, 5]))))
+        st, body, _ = self.request("/api/series", "POST", raw=csv_text,
+                                   ctype="text/csv")
+        self.assertEqual(st, 201, body)
+        for sid in ("P01", "P02", "P03"):
+            self.request("/api/hypotheses/H1/locks", "POST",
+                         body={"sample_id": sid, "offset": 1950})
+        st, a, _ = self._create(
+            name="REV", samples=["P01", "P02", "P03"],
+            window=5, step=5, min_samples=3, eps_threshold=0.01,
+            min_pair_years=5)
+        self.assertEqual(st, 201, a)
+        self.assertEqual([w["window_index"] for w in a["windows"]], [1, 2])
+        w1, w2 = a["windows"]
+        # each pair is correlated only over the years inside its window
+        for w, lo, hi in ((w1, 1950, 1954), (w2, 1955, 1959)):
+            for p in w["pairs"]:
+                self.assertEqual((p["common_start"], p["common_end"]),
+                                 (lo, hi))
+                self.assertEqual(p["n_common"], 5)
+        self.assertAlmostEqual(w1["rbar"], 1.0, 6)
+        self.assertGreater(w1["eps"], 0.0)
+        self.assertTrue(w1["eps_pass"])
+        # the reversed tail window: two of three pairs are -1
+        self.assertLess(w2["rbar"], 0.0)
+        self.assertFalse(w2["eps_pass"])
+        # only the strong front window may be adopted
+        self.request(f"/api/signal/{a['assessment_id']}/complete",
+                     "POST", body={})
+        st, ad, _ = self.request(
+            f"/api/signal/{a['assessment_id']}/adopt", "POST", body={})
+        self.assertEqual(st, 200, ad)
+        self.assertEqual((ad["reliable_span"]["start_year"],
+                          ad["reliable_span"]["end_year"]), (1950, 1954))
+        # the pinned master must not reach beyond the reliable range
+        st, m, _ = self.request("/api/master", hypothesis="H1",
+                                signal_id=a["assessment_id"])
+        self.assertEqual(m["years"][0]["year"], 1950)
+        self.assertEqual(m["years"][-1]["year"], 1954)
+
+    def test_adopted_assessment_cannot_change_its_reliable_span(self):
+        st, a, _ = self._create()
+        st, ad, _ = self._adopt(a["assessment_id"])
+        first_span = dict(ad["reliable_span"])
+        self.assertEqual(st, 200)
+        # re-adopting with explicit windows is refused (same version)
+        st, body, _ = self.request(
+            f"/api/signal/{a['assessment_id']}/adopt", "POST",
+            body={"windows": [first_span["window_indexes"][0]]})
+        self.assertEqual(st, 422, body)
+        self.assertEqual(body["errors"][0]["code"],
+                         "E_SIGNAL_ALREADY_ADOPTED")
+        # and re-adopting with no windows is refused too
+        st, body, _ = self.request(
+            f"/api/signal/{a['assessment_id']}/adopt", "POST", body={})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"],
+                         "E_SIGNAL_ALREADY_ADOPTED")
+        # the stored span and version remain exactly as first adopted
+        st, got, _ = self.request(f"/api/signal/{a['assessment_id']}")
+        self.assertEqual(got["reliable_span"], first_span)
+        self.assertEqual(got["version"], 1)
+
     def test_param_validation_and_missing_inputs(self):
         st, body, _ = self.request("/api/signal", "POST", body={
             "name": "BAD", "hypothesis": "H1", "window": 2, "step": 0,

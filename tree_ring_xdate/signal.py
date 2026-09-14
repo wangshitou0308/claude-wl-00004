@@ -5,11 +5,13 @@ window by window, with the classic dendrochronological quantities:
 
 * **sample depth**     -- number of member samples that share a given year;
 * **pair correlation** -- Pearson correlation of every member pair over
-                          the years the two series share inside the window;
+                          the common years *inside that window only*
+                          (never the pair's full overlap);
 * **Rbar** (R̄)        -- mean of the *valid* pair correlations -- a pair is
                           only valid when it shares at least
-                          ``min_pair_years`` common years and both sides
-                          keep a non-zero variance over those years;
+                          ``min_pair_years`` common years *within the
+                          window* and both sides keep a non-zero variance
+                          over those years;
 * **EPS**              -- expressed population signal
                           ``N·R̄ / (N·R̄ + 1 − R̄)`` with ``N`` the *mean*
                           sample depth over the window years.
@@ -41,9 +43,12 @@ Lifecycle::
 A created assessment is a ``draft``; finishing it (POST .../complete) moves
 it to ``completed``; adopting chooses *consecutive* windows whose EPS
 reaches ``eps_threshold`` as the reliable interval -- windows below the
-threshold may never be adopted; retiring takes the assessment (and any
-range it restricted) out of service.  Only an adopted version can be
-pinned by the master chronology (``signal_id``) and by sliding-match runs,
+threshold may never be adopted.  Adoption is a one-way, immutable decision:
+once adopted the reliable interval and version are fixed and a further
+adopt call is refused (``E_SIGNAL_ALREADY_ADOPTED``); retiring takes the
+assessment (and any range it restricted) out of service.  Only an adopted
+version can be pinned by the master chronology (``signal_id``) and by
+sliding-match runs,
 which then restrict their reference to the reliable interval; older jobs
 keep the range they were created with.
 
@@ -265,12 +270,14 @@ def window_stats(years: list[int], members: dict[str, dict], *,
 
     pairs = []
     valid_r = []
-    # pairs are always recorded as evidence, even when ineligible
+    # pairs are always recorded as evidence, even when ineligible; a pair
+    # is correlated ONLY over the common years inside *this* window, never
+    # over the members' full overlap
     for i in range(len(member_ids)):
         for j in range(i + 1, len(member_ids)):
             a, b = member_ids[i], member_ids[j]
             ia, ib = members[a]["index"], members[b]["index"]
-            common = sorted(y for y in ia if y in ib)
+            common = [y for y in years if y in ia and y in ib]
             xs = [ia[y] for y in common]
             ys = [ib[y] for y in common]
             pair = {"sample_a": a, "sample_b": b,
@@ -542,6 +549,11 @@ def adopt_assessment(conn, assessment_id: int, *,
     consecutive.  With no explicit choice the longest passing run is used;
     when no window passes, adoption is refused -- below-threshold years can
     never be adopted.
+
+    Adoption is a one-way, immutable decision: once an assessment is
+    adopted the reliable interval is fixed and a further adopt call is
+    refused (retire the assessment instead); the version number never
+    changes and downstream readers keep the same range.
     """
     row = _require_assessment(conn, assessment_id)
     if row["status"] == "retired":
@@ -552,6 +564,15 @@ def adopt_assessment(conn, assessment_id: int, *,
             "E_SIGNAL_DRAFT",
             f"assessment {assessment_id} is still a draft; finish it "
             f"(POST .../complete) before adopting a reliable interval")])
+    if row["status"] == "adopted":
+        span = row["reliable_span"]
+        raise SignalError([_err(
+            "E_SIGNAL_ALREADY_ADOPTED",
+            f"assessment {assessment_id} is already adopted with a fixed "
+            f"reliable interval {span['start_year']}..{span['end_year']}; "
+            f"the adopted range cannot be changed -- retire the assessment "
+            f"instead",
+            existing_reliable_span=span)])
     by_index = {w["window_index"]: w for w in row["windows"]}
     runs = _pass_runs(row["windows"])
 
@@ -602,12 +623,8 @@ def adopt_assessment(conn, assessment_id: int, *,
             "n_windows": len(chosen),
             "min_eps": min(w["eps"] for w in chosen),
             "eps_threshold": row["params"]["eps_threshold"]}
-    if row["status"] != "adopted":
-        db.mark_signal_status(conn, assessment_id, "adopted",
-                              reliable_span=span)
-    else:
-        db.mark_signal_status(conn, assessment_id, "adopted",
-                              reliable_span=span)
+    db.mark_signal_status(conn, assessment_id, "adopted",
+                          reliable_span=span)
     return assessment_detail(conn, assessment_id)
 
 
