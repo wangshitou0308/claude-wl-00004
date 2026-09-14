@@ -89,9 +89,21 @@ def known_start_conflicts(known: dict[str, int | None],
     return sorted(out, key=lambda c: c["sample_id"])
 
 
+def _std_indices(conn, std):
+    """sample_id -> {year: standardized index} from a resolved std plan.
+
+    ``std`` is the dict produced by
+    :func:`tree_ring_xdate.standardization.resolve_adopted` (or None).
+    """
+    if std is None:
+        return {}
+    return std["indices"]
+
+
 def build_reference(conn, reference: str,
                     hypothesis: str | None = None,
-                    exclude: set[str] | None = None
+                    exclude: set[str] | None = None,
+                    std: dict | None = None
                     ) -> tuple[dict[int, float], dict]:
     """Return ``(year_widths, meta)`` for a dated series or the master.
 
@@ -100,12 +112,20 @@ def build_reference(conn, reference: str,
     physical widths, but their year-to-year signs/magnitudes are what the
     correlation statistics need.
 
+    When ``std`` (a resolved adopted standardization version) is given,
+    the master is built from the frozen standardized indices instead, and
+    only samples covered by the plan contribute; a designated reference
+    series is read through the plan's index curve when it covers the
+    sample.  Missing-ring indices stay zero; false rings never had a
+    calendar year.
+
     ``exclude`` drops samples from the master chronology (leave-one-out
     stability checks must never compare a sample with a chronology it
     belongs to); excluding the designated reference series itself is an
     error.
     """
     exclude = exclude or set()
+    indices = _std_indices(conn, std)
     if reference not in (None, "", "master", "MASTER", "@master"):
         if reference in exclude:
             raise ValueError(
@@ -134,12 +154,18 @@ def build_reference(conn, reference: str,
             raise ValueError(
                 f"reference series {reference!r} is not dated and has no "
                 f"lock in hypothesis {hypothesis!r}")
+        if reference in indices:
+            yw = dict(indices[reference])
         meta = {"type": "series", "sample_id": reference,
                 "unit": s["unit"], "start": min(yw), "end": max(yw),
                 "n_years": len(yw), "offset": offset,
                 "known_start": s["known_start"],
                 "hypothesis": hypothesis,
-                "corrected": bool(corr)}
+                "corrected": bool(corr),
+                "standardized": reference in indices}
+        if std is not None:
+            meta["standardization_id"] = std["id"]
+            meta["standardization_version"] = std["version"]
         if (s["known_start"] is not None
                 and locked is not None and locked != s["known_start"]):
             meta["known_start_conflicts"] = known_start_conflicts(
@@ -156,18 +182,34 @@ def build_reference(conn, reference: str,
             excluded.append(sid)
             continue
         s = db.get_series(conn, sid)
-        if sid in corr_maps:
-            yw = corrected_year_widths(corr_maps[sid])
+        if sid in indices:
+            # frozen standardized index -- no further division by mean
+            yw = dict(indices[sid])
+            unit_value = 1.0
+            standardized = True
         else:
-            yw = placed_year_widths(s, off)
+            if std is not None:
+                # a standardized chronology contains plan members only
+                continue
+            if sid in corr_maps:
+                yw = corrected_year_widths(corr_maps[sid])
+            else:
+                yw = placed_year_widths(s, off)
+            unit_value = None
+            standardized = False
         positives = [w for w in yw.values() if w > 0]
         if len(positives) < 3:
             continue
-        mean_w = statistics.fmean(positives)
+        if unit_value is None:
+            mean_w = statistics.fmean(positives)
         members.append({"sample_id": sid, "start": min(yw), "end": max(yw),
-                        "corrected": sid in corr_maps})
+                        "corrected": sid in corr_maps,
+                        "standardized": standardized})
         for y, w in yw.items():
-            per_year[y].append(w / mean_w if w > 0 else 0.0)
+            if standardized:
+                per_year[y].append(w)
+            else:
+                per_year[y].append(w / mean_w if w > 0 else 0.0)
             years.add(y)
     meta = {"type": "master", "members": members,
             "hypothesis": hypothesis,
@@ -176,6 +218,10 @@ def build_reference(conn, reference: str,
             "n_years": len(years),
             "known_start_conflicts":
                 known_start_conflicts(known, locks)}
+    if std is not None:
+        meta["standardized"] = True
+        meta["standardization_id"] = std["id"]
+        meta["standardization_version"] = std["version"]
     if excluded:
         meta["excluded_samples"] = sorted(excluded)
     return ({y: statistics.fmean(per_year[y]) for y in sorted(years)}, meta)
@@ -273,14 +319,26 @@ def crossdate(conn, sample_id: str, *, reference: str = "master",
               offset_min: int | None = None, offset_max: int | None = None,
               min_overlap: int = 20, narrow_z: float = -1.0,
               narrow_q: float = 0.1, tolerance: float = 0.05,
-              top_k: int = 10, hypothesis: str | None = None) -> dict:
+              top_k: int = 10, hypothesis: str | None = None,
+              std: dict | None = None) -> dict:
     target = db.get_series(conn, sample_id)
     if target is None:
         raise KeyError(f"sample not found: {sample_id}")
     t_widths = [r["width"] for r in target["rings"]]
     n = len(t_widths)
 
-    ref_yw, ref_meta = build_reference(conn, reference, hypothesis)
+    ref_yw, ref_meta = build_reference(conn, reference, hypothesis,
+                                       std=std)
+    # A standardized reference expects a dimensionless target: a target
+    # covered by an adopted plan uses its frozen index curve; any other
+    # sample is divided by its own positive mean so the two sides are
+    # comparable.
+    indices = _std_indices(conn, std)
+    target_std = indices.get(sample_id) if std is not None else None
+    if std is not None and target_std is None:
+        positives = [w for w in t_widths if w > 0]
+        mean_w = statistics.fmean(positives) if positives else 1.0
+        t_widths = [w / mean_w if w > 0 else 0.0 for w in t_widths]
     ref_years = set(ref_yw)
     if offset_min is None or offset_max is None:
         dmin, dmax = default_offset_window(target, ref_years)
@@ -300,16 +358,23 @@ def crossdate(conn, sample_id: str, *, reference: str = "master",
         for y in range(lo, hi + 1):
             if y not in ref_yw:
                 continue  # sparse reference years (missing rings outside)
-            xs.append(t_widths[y - off])
+            if target_std is not None:
+                w = target_std.get(y, 0.0)
+            else:
+                w = t_widths[y - off]
+            xs.append(w)
             ys.append(ref_yw[y])
         if len(xs) < min_overlap:
             continue
         r = pearson(xs, ys)
         sign, sign_detail = sign_agreement(xs, ys)
-        t_yw = {off + i: w for i, w in enumerate(t_widths)}
-        t_narrow = narrow_years(
-            {y: t_yw[y] for y in range(lo, hi + 1)},
-            z=narrow_z, quantile=narrow_q)
+        if target_std is not None:
+            t_block = {y: target_std.get(y, 0.0)
+                       for y in range(lo, hi + 1)}
+        else:
+            t_block = {off + i: w for i, w in enumerate(t_widths)
+                       if lo <= off + i <= hi}
+        t_narrow = narrow_years(t_block, z=narrow_z, quantile=narrow_q)
         hits = sorted(y for y in t_narrow if y in ref_narrow)
         candidates.append({
             "offset": off,
@@ -326,11 +391,14 @@ def crossdate(conn, sample_id: str, *, reference: str = "master",
 
     params = {"offset_min": offset_min, "offset_max": offset_max,
               "min_overlap": min_overlap, "narrow_z": narrow_z,
-              "narrow_q": narrow_q, "tolerance": tolerance}
+              "narrow_q": narrow_q, "tolerance": tolerance,
+              "standardization_id": std["id"] if std else None,
+              "standardization_version": std["version"] if std else None}
     return {
         "sample_id": sample_id,
         "reference": reference,
         "reference_meta": ref_meta,
+        "target_standardized": target_std is not None,
         "params": params,
         "n_scanned": int(offset_max) - int(offset_min) + 1,
         "candidates": candidates,
@@ -372,9 +440,15 @@ def _rank_and_select(candidates: list[dict], tolerance: float,
 
 def build_chronology(conn, hypothesis: str | None = None, *,
                      min_samples: int = 3, outlier_sd: float = 2.0,
-                     weak_correlation: float = 0.3
+                     weak_correlation: float = 0.3,
+                     std: dict | None = None
                      ) -> dict:
     """Year-by-year sample count, mean/median index and dispersion.
+
+    With a resolved adopted standardization ``std`` the per-year index
+    series come from the frozen standardized indices (plan members only,
+    no further division by sample mean); otherwise indices are width /
+    sample positive mean as before.
 
     Flags:
       LOW_COVERAGE   -- fewer than ``min_samples`` samples that year
@@ -385,6 +459,7 @@ def build_chronology(conn, hypothesis: str | None = None, *,
                         sample correlates weakly with all the others
                         (leave-one-out over the common interval)
     """
+    indices = _std_indices(conn, std)
     placements, known, locks, corr_maps = resolve_placements(conn,
                                                              hypothesis)
     per_year = defaultdict(list)   # year -> [(sid, index)]
@@ -392,17 +467,26 @@ def build_chronology(conn, hypothesis: str | None = None, *,
     units = defaultdict(set)
     for sid, off in placements.items():
         s = db.get_series(conn, sid)
-        if sid in corr_maps:
-            yw = corrected_year_widths(corr_maps[sid])
+        if sid in indices:
+            yw = dict(indices[sid])
+            standardized = True
         else:
-            yw = placed_year_widths(s, off)
+            if std is not None:
+                continue
+            if sid in corr_maps:
+                yw = corrected_year_widths(corr_maps[sid])
+            else:
+                yw = placed_year_widths(s, off)
+            standardized = False
         sample_yw[sid] = yw
         positives = [w for w in yw.values() if w > 0]
         if len(positives) < 3:
             continue
-        mean_w = statistics.fmean(positives)
+        if not standardized:
+            mean_w = statistics.fmean(positives)
         for y, w in yw.items():
-            per_year[y].append((sid, w / mean_w if w > 0 else 0.0))
+            value = w if standardized else (w / mean_w if w > 0 else 0.0)
+            per_year[y].append((sid, value))
             units[y].add(s["unit"])
 
     years = sorted(per_year)
@@ -457,6 +541,10 @@ def build_chronology(conn, hypothesis: str | None = None, *,
         "correction_drafts": {
             sid: sorted({r["draft_id"] for r in corr_maps[sid]})
             for sid in sorted(corr_maps)},
+        "standardized": std is not None,
+        "standardization_id": std["id"] if std else None,
+        "standardization_version": std["version"] if std else None,
+        "standardized_samples": sorted(indices) if std else [],
         "yearly": yearly,
         "outliers": outliers,
         "unit_mismatches": unit_mismatches,

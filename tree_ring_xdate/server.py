@@ -16,7 +16,8 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import analysis, corrections, db, stability, validate
+from . import (analysis, corrections, db, stability, standardization,
+               validate)
 from .docs import OPENAPI, HTML_DOCS
 
 DEFAULT_HYPOTHESIS = "default"
@@ -167,6 +168,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(422, {"error": {"code": "STABILITY_REJECTED",
                                        "message": str(e)},
                              "errors": e.errors})
+        except standardization.StandardizationError as e:
+            self._send(422, {"error": {"code": "STANDARDIZATION_REJECTED",
+                                       "message": str(e)},
+                             "errors": e.errors})
         except KeyError as e:
             self._send(404, {"error": {"code": "NOT_FOUND",
                                       "message": str(e).strip("'")}})
@@ -244,12 +249,40 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"runs": db.list_runs(
             self.conn, limit=int(query.get("limit", 50)))})
 
+    # -- standardization pinning ------------------------------------------
+    def _std(self, body, query, *, hypothesis=None):
+        """Resolve an adopted standardization version for a calculation.
+
+        Accepts standardization_id (or standardization) + optional
+        standardization_version from either JSON body or query string.
+        Old requests without a pin return None and keep their raw basis.
+        """
+        raw_id = (body.get("standardization_id")
+                  if isinstance(body, dict) else None)
+        if raw_id is None and isinstance(body, dict):
+            raw_id = body.get("standardization")
+        if raw_id is None:
+            raw_id = query.get("standardization_id") \
+                or query.get("standardization")
+        if raw_id in (None, "", "none", "null"):
+            return None
+        ver = (body.get("standardization_version")
+               if isinstance(body, dict) else None)
+        if ver is None:
+            ver = query.get("standardization_version")
+        return standardization.resolve_adopted(
+            self.conn, int(raw_id),
+            int(ver) if ver not in (None, "") else None,
+            hypothesis=hypothesis)
+
     def ep_crossdate(self, query):
         body = self._json_body() if self.command == "POST" else {}
         sid = body.get("sample_id") or query.get("sample_id")
         if not sid:
             raise ApiError(400, "MISSING_PARAM",
                            "sample_id is required")
+        hypothesis = body.get("hypothesis", query.get("hypothesis"))
+        std = self._std(body, query, hypothesis=hypothesis)
         params = {
             "reference": body.get("reference",
                                   query.get("reference", "master")),
@@ -262,8 +295,7 @@ class Handler(BaseHTTPRequestHandler):
             "tolerance": float(body.get("tolerance",
                                         query.get("tolerance", 0.05))),
             "top_k": int(body.get("top_k", query.get("top_k", 10))),
-            "hypothesis": body.get("hypothesis",
-                                   query.get("hypothesis")),
+            "hypothesis": hypothesis,
         }
         for k in ("offset_min", "offset_max"):
             v = body.get(k, query.get(k))
@@ -271,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
         if params["min_overlap"] < 3:
             raise ApiError(400, "BAD_REQUEST",
                            "min_overlap must be >= 3")
-        result = analysis.crossdate(self.conn, sid, **params)
+        result = analysis.crossdate(self.conn, sid, std=std, **params)
         run_id = db.save_run(self.conn, sid, params["reference"],
                              result["params"], result["candidates"])
         result["run_id"] = run_id
@@ -351,11 +383,13 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_chronology(hyp_name, query)
 
     def _serve_chronology(self, hypothesis, query):
+        std = self._std({}, query, hypothesis=hypothesis)
         chrono = analysis.build_chronology(
             self.conn, hypothesis,
             min_samples=int(query.get("min_samples", 3)),
             outlier_sd=float(query.get("outlier_sd", 2.0)),
-            weak_correlation=float(query.get("weak_correlation", 0.3)))
+            weak_correlation=float(query.get("weak_correlation", 0.3)),
+            std=std)
         self._send(200, chrono)
 
     def ep_master(self, query):
@@ -366,7 +400,9 @@ class Handler(BaseHTTPRequestHandler):
                                f"hypothesis not found: {hypothesis}")
             db.create_hypothesis(self.conn, hypothesis,
                                  "auto-created working hypothesis")
-        yw, meta = analysis.build_reference(self.conn, "master", hypothesis)
+        std = self._std({}, query, hypothesis=hypothesis)
+        yw, meta = analysis.build_reference(self.conn, "master", hypothesis,
+                                            std=std)
         self._send(200, {"meta": meta,
                          "years": [{"year": y, "index": yw[y]}
                                    for y in sorted(yw)]})
@@ -390,7 +426,8 @@ class Handler(BaseHTTPRequestHandler):
             self.conn, hyp_name,
             min_samples=int(query.get("min_samples", 3)),
             outlier_sd=float(query.get("outlier_sd", 2.0)),
-            weak_correlation=float(query.get("weak_correlation", 0.3)))
+            weak_correlation=float(query.get("weak_correlation", 0.3)),
+            std=self._std({}, query, hypothesis=hyp_name))
         report = {
             "report_type": "tree_ring_crossdating",
             "generated_at": db.now_iso(),
@@ -534,6 +571,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "MISSING_PARAM",
                            "hypothesis is required")
         sample_id = body.get("sample_id", query.get("sample_id")) or None
+        std = self._std(body, query, hypothesis=hypothesis)
         result = stability.create_check(
             self.conn, hypothesis=hypothesis, sample_id=sample_id,
             reference=body.get("reference",
@@ -552,7 +590,7 @@ class Handler(BaseHTTPRequestHandler):
                                     query.get("narrow_z", -1.0))),
             narrow_q=float(body.get("narrow_q",
                                     query.get("narrow_q", 0.1))),
-            note=body.get("note", ""))
+            note=body.get("note", ""), std=std)
         self._send(201, result)
 
     def ep_stability_list(self, query):
@@ -586,6 +624,127 @@ class Handler(BaseHTTPRequestHandler):
         download = query.get("download", "1").lower() in ("1", "true")
         self._send(200, report,
                    download_name=(f"stability_{cid}.json"
+                                  if download else None))
+
+    # -- standardization plans ---------------------------------------------
+    def ep_std_create(self, query):
+        body = self._json_body()
+        name = body.get("name") or query.get("name")
+        if not name:
+            raise ApiError(400, "MISSING_PARAM", "name is required")
+        hypothesis = (body.get("hypothesis")
+                      or query.get("hypothesis"))
+        if not hypothesis:
+            raise ApiError(400, "MISSING_PARAM", "hypothesis is required")
+        samples = body.get("samples")
+        if samples is None:
+            raise ApiError(400, "MISSING_PARAM",
+                           "samples (per-sample detrending choices) is "
+                           "required")
+        plan = standardization.create_plan(
+            self.conn, name=name, hypothesis=hypothesis,
+            samples=samples, note=body.get("note", ""))
+        self._send(201, plan)
+
+    def ep_std_list(self, query):
+        self._send(200, {"standardizations": db.list_standardizations(
+            self.conn, status=query.get("status"),
+            hypothesis=query.get("hypothesis"))})
+
+    def _std_head(self, sid):
+        plan = db.get_standardization(self.conn, int(sid))
+        if plan is None:
+            raise ApiError(404, "NOT_FOUND",
+                           f"standardization plan not found: {sid}")
+        return plan
+
+    def ep_std_get(self, query, sid):
+        self._std_head(sid)
+        version = query.get("version")
+        detail = standardization.plan_detail(
+            self.conn, int(sid),
+            version=int(version) if version not in (None, "") else None)
+        self._send(200, detail)
+
+    def ep_std_preview(self, query, sid):
+        self._std_head(sid)
+        body = self._json_body() if self.command == "POST" else {}
+        if body.get("samples") is not None:
+            # ad-hoc: evaluate a candidate config without creating a version
+            config = standardization.normalize_config(
+                {"samples": body["samples"]})
+            plan = self._std_head(sid)
+            preview = standardization.preview_public(
+                self.conn, plan["hypothesis"], config)
+            self._send(200, {"standardization_id": int(sid),
+                             "ad_hoc": True, "preview": preview})
+            return
+        version = body.get("version", query.get("version"))
+        detail = standardization.plan_detail(
+            self.conn, int(sid),
+            version=int(version) if version not in (None, "") else None)
+        self._send(200, detail)
+
+    def ep_std_versions(self, query, sid):
+        plan = self._std_head(sid)
+        if self.command == "POST":
+            body = self._json_body()
+            samples = body.get("samples")
+            if samples is None:
+                raise ApiError(400, "MISSING_PARAM",
+                               "samples (per-sample detrending choices) "
+                               "is required")
+            detail = standardization.add_version(
+                self.conn, int(sid), samples=samples,
+                note=body.get("note", ""))
+            self._send(201, detail)
+            return
+        self._send(200, {
+            "standardization_id": int(sid),
+            "status": plan["status"],
+            "latest_version": plan["latest_version"],
+            "adopted_version": plan["adopted_version"],
+            "versions": db.list_std_versions(self.conn, int(sid))})
+
+    def ep_std_validate(self, query, sid):
+        self._std_head(sid)
+        body = self._json_body() if self.command == "POST" else {}
+        version = body.get("version", query.get("version"))
+        out = standardization.validate_plan(
+            self.conn, int(sid),
+            version=int(version) if version not in (None, "") else None)
+        self._send(200, out)
+
+    def ep_std_adopt(self, query, sid):
+        self._std_head(sid)
+        body = self._json_body() if self.command == "POST" else {}
+        version = body.get("version", query.get("version"))
+        out = standardization.adopt_plan(
+            self.conn, int(sid),
+            version=int(version) if version not in (None, "") else None)
+        self._send(200, out)
+
+    def ep_std_retire(self, query, sid):
+        self._std_head(sid)
+        out = standardization.retire_plan(self.conn, int(sid))
+        self._send(200, out)
+
+    def ep_std_compare(self, query, sid):
+        self._std_head(sid)
+        a, b = query.get("a"), query.get("b")
+        if not a or not b:
+            raise ApiError(400, "MISSING_PARAM",
+                           "query parameters 'a' and 'b' (version "
+                           "numbers) are required")
+        self._send(200, standardization.compare_versions(
+            self.conn, int(sid), int(a), int(b)))
+
+    def ep_std_download(self, query, sid):
+        self._std_head(sid)
+        report = standardization.plan_report(self.conn, int(sid))
+        download = query.get("download", "1").lower() in ("1", "true")
+        self._send(200, report,
+                   download_name=(f"standardization_{sid}.json"
                                   if download else None))
 
 
@@ -654,6 +813,18 @@ _ROUTES = [
     ({"GET"},    "/api/stability/compare",             Handler.ep_stability_compare),
     ({"GET"},    "/api/stability/{cid}",               Handler.ep_stability_get),
     ({"GET"},    "/api/stability/{cid}/download",      Handler.ep_stability_download),
+    ({"POST"},   "/api/standardizations",              Handler.ep_std_create),
+    ({"GET"},    "/api/standardizations",              Handler.ep_std_list),
+    ({"GET"},    "/api/standardizations/{sid}",        Handler.ep_std_get),
+    ({"GET", "POST"}, "/api/standardizations/{sid}/preview",
+                                                         Handler.ep_std_preview),
+    ({"GET", "POST"}, "/api/standardizations/{sid}/versions",
+                                                         Handler.ep_std_versions),
+    ({"POST"},   "/api/standardizations/{sid}/validate", Handler.ep_std_validate),
+    ({"POST"},   "/api/standardizations/{sid}/adopt",    Handler.ep_std_adopt),
+    ({"POST"},   "/api/standardizations/{sid}/retire",   Handler.ep_std_retire),
+    ({"GET"},    "/api/standardizations/{sid}/compare",  Handler.ep_std_compare),
+    ({"GET"},    "/api/standardizations/{sid}/download", Handler.ep_std_download),
 ]
 
 _ENDPOINT_HELP = [
@@ -715,6 +886,28 @@ _ENDPOINT_HELP = [
      "description": "比较两次检查：参数差异、共有窗口 best_shift 变化、疑似错位标记的新增与消失"},
     {"method": "GET", "path": "/api/stability/{id}/download",
      "description": "检查完整 JSON 导出（参数、样本映射、参照快照、全部窗口与标记；?download=0 取消附件头）"},
+    {"method": "POST", "path": "/api/standardizations",
+     "description": "创建序列标准化方案（draft 版本1）：以 {samples:[{sample_id,method,parameters}]} 逐样本选择水平均值 mean、负指数曲线 negative_exponential 或固定窗口居中移动平均 moving_average（window 为>=3 奇数）；方案从指定 hypothesis 的采用映射读取年份与校正版本；缺失环保留零宽、伪环不参与拟合"},
+    {"method": "GET", "path": "/api/standardizations",
+     "description": "列出标准化方案（可按 status、hypothesis 过滤）"},
+    {"method": "GET", "path": "/api/standardizations/{id}",
+     "description": "方案详情与最新版本（?version=N 指定版本）：逐样本期望生长曲线、轮宽指数与拟合诊断（已采用版本返回冻结曲线）"},
+    {"method": "POST/GET", "path": "/api/standardizations/{id}/preview",
+     "description": "预览：POST 可提交候选 samples 做临时试算（不建版本）；GET/不带体返回指定 ?version=N 的期望曲线与指数。有效点不足/负指数不收敛/期望值非正/移动窗口数据不足时返回样本与测量序号，不自动更换算法"},
+    {"method": "GET/POST", "path": "/api/standardizations/{id}/versions",
+     "description": "GET 列出全部版本；POST 以新 samples 配置生成新版本（draft/validated 可改，adopted/retired 不可改；编辑 validated 方案回到 draft）"},
+    {"method": "POST", "path": "/api/standardizations/{id}/validate",
+     "description": "校验全部样本：全部通过且为最新版本时方案变为 validated，否则 422 并逐样本给出测量序号（不自动改方法）"},
+    {"method": "POST", "path": "/api/standardizations/{id}/adopt",
+     "description": "采用方案（?version=N 或 body version，默认最新）：再次全样本校验通过后冻结来源映射（含校正版本）、参数与拟合曲线；只有 adopted 版本可被主年表/滑动匹配/稳定性检查指定"},
+    {"method": "POST", "path": "/api/standardizations/{id}/retire",
+     "description": "停用方案（retired 不可再改或再采用；已冻结的旧作业仍保留原计算依据）"},
+    {"method": "GET", "path": "/api/standardizations/{id}/compare?a=&b=",
+     "description": "比较两个方案版本：样本增删、方法/参数变化与拟合诊断"},
+    {"method": "GET", "path": "/api/standardizations/{id}/download",
+     "description": "方案完整 JSON 导出（全部版本、冻结来源映射、期望曲线与指数、诊断；?download=0 取消附件头）"},
+    {"method": "GET/POST", "path": "/api/master /api/chronology /api/crossdate /api/stability",
+     "description": "以上计算接口均支持 standardization_id（或 standardization）+ standardization_version 指定已采用版本；不传则保持原原始宽度/样本均值口径，旧作业依据不变"},
     {"method": "GET", "path": "/api/master",
      "description": "当前主年表（逐年平均指数）"},
     {"method": "GET", "path": "/api/openapi.json",

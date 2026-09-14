@@ -15,6 +15,10 @@ correction_map adopted year mapping (hypothesis, sample, seq) -> year
 stability_checks local stability-check jobs: parameters, adopted sample
                  mappings, frozen reference snapshot, per-window results
                  and misplacement flags (all as JSON evidence)
+standardizations   sequence-standardization plans: per-sample detrending
+                 methods/parameters, draft|validated|adopted|retired
+                 lifecycle, versioned source mapping + parameters and the
+                 fitted expected-growth curves and diagnostics
 """
 
 from __future__ import annotations
@@ -62,6 +66,8 @@ CREATE TABLE IF NOT EXISTS runs (
     narrow_z        REAL NOT NULL,
     narrow_q        REAL NOT NULL,
     tolerance       REAL NOT NULL,
+    standardization_id        INTEGER,     -- pinned adopted std version
+    standardization_version   INTEGER,
     created_at      TEXT NOT NULL
 );
 
@@ -164,11 +170,58 @@ CREATE TABLE IF NOT EXISTS stability_checks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stab_hyp ON stability_checks(hypothesis);
+
+CREATE TABLE IF NOT EXISTS standardizations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL UNIQUE,
+    hypothesis      TEXT NOT NULL,   -- dating hypothesis supplying year maps
+    note            TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'draft',
+                                     -- draft | validated | adopted | retired
+    latest_version  INTEGER NOT NULL DEFAULT 1,
+    adopted_version INTEGER,          -- version the live chronology uses
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS standardization_versions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    std_id          INTEGER NOT NULL
+                    REFERENCES standardizations(id) ON DELETE CASCADE,
+    version         INTEGER NOT NULL,
+    config          TEXT NOT NULL,    -- JSON per-sample method/parameters
+    source_mapping  TEXT,             -- JSON year mapping frozen at adoption
+    curves          TEXT,             -- JSON expected curves + diagnostics
+    note            TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    UNIQUE(std_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_std_versions
+    ON standardization_versions(std_id);
 """
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# Columns added after the first release; CREATE TABLE IF NOT EXISTS never
+# alters an existing database, so patch older files in place.
+_ADDED_COLUMNS = {
+    "runs": [("standardization_id", "INTEGER"),
+             ("standardization_version", "INTEGER")],
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, cols in _ADDED_COLUMNS.items():
+        existing = {r["name"] for r in
+                    conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in cols:
+            if name not in existing:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -181,6 +234,8 @@ def connect(db_path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    with conn:
+        _migrate(conn)
     return conn
 
 
@@ -315,13 +370,16 @@ def save_run(conn: sqlite3.Connection, sample_id: str, reference: str,
     with conn:
         cur = conn.execute(
             """INSERT INTO runs (sample_id, reference, offset_min, offset_max,
-                   min_overlap, narrow_z, narrow_q, tolerance, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                   min_overlap, narrow_z, narrow_q, tolerance,
+                   standardization_id, standardization_version, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 sample_id, reference,
                 params.get("offset_min"), params.get("offset_max"),
                 params["min_overlap"], params["narrow_z"], params["narrow_q"],
-                params["tolerance"], ts,
+                params["tolerance"],
+                params.get("standardization_id"),
+                params.get("standardization_version"), ts,
             ),
         )
         run_id = cur.lastrowid
@@ -731,3 +789,167 @@ def list_stability_checks(conn: sqlite3.Connection,
             d.pop(k)
         out.append(d)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Sequence-standardization plans
+# ---------------------------------------------------------------------------
+
+STD_STATUSES = ("draft", "validated", "adopted", "retired")
+
+
+def create_standardization(conn, *, name: str, hypothesis: str,
+                           config: dict, note: str = "") -> int:
+    """Create a plan (status draft) together with its config version 1."""
+    ts = now_iso()
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO standardizations (name, hypothesis, note, status,
+                   latest_version, adopted_version, created_at, updated_at)
+               VALUES (?,?,?, 'draft', 1, NULL, ?, ?)""",
+            (name, hypothesis, note, ts, ts),
+        )
+        std_id = cur.lastrowid
+        conn.execute(
+            """INSERT INTO standardization_versions (std_id, version, config,
+                   note, created_at)
+               VALUES (1, ?, ?, ?, ?)""",
+            (std_id, 1, json.dumps(config, ensure_ascii=False), note, ts),
+        )
+    return std_id
+
+
+def save_standardization_version(conn, std_id: int, config: dict, *,
+                                 note: str = "") -> int:
+    """Append a config version; returns the new version number."""
+    ts = now_iso()
+    with conn:
+        row = conn.execute(
+            "SELECT latest_version FROM standardizations WHERE id = ?",
+            (std_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"standardization plan not found: {std_id}")
+        version = row["latest_version"] + 1
+        conn.execute(
+            """INSERT INTO standardization_versions (std_id, version, config,
+                   note, created_at)
+               VALUES (?,?,?,?,?)""",
+            (std_id, version, json.dumps(config, ensure_ascii=False), note, ts),
+        )
+        conn.execute(
+            "UPDATE standardizations SET latest_version = ?, updated_at = ? "
+            "WHERE id = ?", (version, ts, std_id),
+        )
+    return version
+
+
+def _std_head(row: sqlite3.Row) -> dict:
+    return dict(row)
+
+
+def get_standardization(conn, std_id: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM standardizations WHERE id = ?", (std_id,),
+    ).fetchone()
+    return _std_head(row) if row else None
+
+
+def get_standardization_by_name(conn, name: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM standardizations WHERE name = ?", (name,),
+    ).fetchone()
+    return _std_head(row) if row else None
+
+
+def list_standardizations(conn, *, status: str | None = None,
+                          hypothesis: str | None = None) -> list[dict]:
+    sql = "SELECT * FROM standardizations"
+    cond, args = [], []
+    if status:
+        cond.append("status = ?")
+        args.append(status)
+    if hypothesis:
+        cond.append("hypothesis = ?")
+        args.append(hypothesis)
+    if cond:
+        sql += " WHERE " + " AND ".join(cond)
+    sql += " ORDER BY id DESC"
+    out = []
+    for r in conn.execute(sql, args):
+        d = dict(r)
+        # number of configured samples lives in the JSON of latest version
+        v = conn.execute(
+            "SELECT config FROM standardization_versions WHERE std_id = ? "
+            "AND version = ?", (d["id"], d["latest_version"]),
+        ).fetchone()
+        d["n_samples"] = len(json.loads(v["config"])["samples"]) if v else 0
+        out.append(d)
+    return out
+
+
+def get_std_version(conn, std_id: int, version: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM standardization_versions WHERE std_id = ? AND version = ?",
+        (std_id, version),
+    ).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    d["config"] = json.loads(d["config"])
+    d["source_mapping"] = (json.loads(d["source_mapping"])
+                           if d["source_mapping"] else None)
+    d["curves"] = json.loads(d["curves"]) if d["curves"] else None
+    return d
+
+
+def list_std_versions(conn, std_id: int) -> list[dict]:
+    rows = conn.execute(
+        """SELECT version, note, created_at,
+                  (source_mapping IS NOT NULL) AS frozen,
+                  (curves IS NOT NULL) AS has_curves
+           FROM standardization_versions WHERE std_id = ? ORDER BY version""",
+        (std_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def freeze_std_version(conn, std_id: int, version: int,
+                       source_mapping: dict, curves: dict) -> None:
+    """Freeze the adopted source mapping together with the fitted curves."""
+    ts = now_iso()
+    with conn:
+        conn.execute(
+            """UPDATE standardization_versions
+               SET source_mapping = ?, curves = ?
+               WHERE std_id = ? AND version = ?""",
+            (json.dumps(source_mapping, ensure_ascii=False),
+             json.dumps(curves, ensure_ascii=False), std_id, version),
+        )
+
+
+def mark_standardization_status(conn, std_id: int, status: str, *,
+                                adopted_version: int | None = None,
+                                hypothesis: str | None = None) -> None:
+    ts = now_iso()
+    if status == "adopted":
+        with conn:
+            conn.execute(
+                """UPDATE standardizations SET status = ?, adopted_version = ?,
+                       updated_at = ? WHERE id = ?""",
+                (status, adopted_version, ts, std_id),
+            )
+    elif status == "retired":
+        with conn:
+            conn.execute(
+                """UPDATE standardizations SET status = ?, adopted_version = NULL,
+                       updated_at = ? WHERE id = ?""",
+                (status, ts, std_id),
+            )
+    else:
+        with conn:
+            conn.execute(
+                """UPDATE standardizations SET status = ?, adopted_version = NULL,
+                       updated_at = ? WHERE id = ?""",
+                (status, ts, std_id),
+    )

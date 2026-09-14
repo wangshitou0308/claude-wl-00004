@@ -345,16 +345,19 @@ def _is_master(reference) -> bool:
 
 
 def _reference_snapshot_for(conn, reference: str, hypothesis: str,
-                            sample_id: str) -> dict:
+                            sample_id: str,
+                            std: dict | None = None) -> dict:
     """Frozen reference for one target sample.
 
     Against the master chronology the target itself is excluded
     (leave-one-out): a stability check must never compare a sample with
-    a chronology it belongs to.
+    a chronology it belongs to.  With an adopted standardization plan
+    the leave-one-out master is rebuilt from the other members' frozen
+    indices.
     """
     exclude = {sample_id} if _is_master(reference) else None
     return corrections.reference_snapshot(conn, reference, hypothesis,
-                                          exclude=exclude)
+                                          exclude=exclude, std=std)
 
 
 def create_check(conn, *, hypothesis: str, sample_id: str | None = None,
@@ -365,7 +368,7 @@ def create_check(conn, *, hypothesis: str, sample_id: str | None = None,
                  search_radius: int = DEFAULT_SEARCH_RADIUS,
                  tolerance: float = DEFAULT_TOLERANCE,
                  narrow_z: float = -1.0, narrow_q: float = 0.1,
-                 note: str = "") -> dict:
+                 note: str = "", std: dict | None = None) -> dict:
     """Run a stability check and persist job + evidence in SQLite."""
     errors = _validate_params(window, step, min_valid_years, run_threshold,
                               search_radius, tolerance)
@@ -400,7 +403,8 @@ def create_check(conn, *, hypothesis: str, sample_id: str | None = None,
                 f"target is the designated reference {reference!r} "
                 f"itself; no independent reference to compare against")
             continue
-        snap = _reference_snapshot_for(conn, reference, hypothesis, sid)
+        snap = _reference_snapshot_for(conn, reference, hypothesis, sid,
+                                       std=std)
         if not snap["years"]:
             skipped[sid] = (
                 "no independent reference members remain after "
@@ -483,7 +487,9 @@ def create_check(conn, *, hypothesis: str, sample_id: str | None = None,
               "run_threshold": run_threshold,
               "search_radius": search_radius,
               "tolerance": tolerance,
-              "narrow_z": narrow_z, "narrow_q": narrow_q}
+              "narrow_z": narrow_z, "narrow_q": narrow_q,
+              "standardization_id": std["id"] if std else None,
+              "standardization_version": std["version"] if std else None}
     check_id = db.save_stability_check(
         conn, hypothesis=hypothesis, sample_id=sample_id,
         reference=reference, params=params, note=note, snapshot=snapshots,
@@ -509,12 +515,24 @@ def _mapping_equal(a: list[dict], b: list[dict]) -> bool:
 
 def _reference_status(conn, row: dict) -> dict:
     """Frozen per-target snapshots vs the references as they are now."""
+    from . import standardization as std_mod
+    std_param = row["params"].get("standardization_id")
+    std_live = None
+    if std_param is not None:
+        try:
+            std_live = std_mod.resolve_adopted(
+                conn, std_param,
+                row["params"].get("standardization_version"),
+                hypothesis=row["hypothesis"])
+        except (KeyError, std_mod.StandardizationError) as e:
+            std_live = None
     per = {}
     for sid in sorted(row["snapshot"]):
         frozen = corrections.snapshot_year_widths(row["snapshot"][sid])
         try:
             now = _reference_snapshot_for(conn, row["reference"],
-                                          row["hypothesis"], sid)
+                                          row["hypothesis"], sid,
+                                          std=std_live)
             now_yw = corrections.snapshot_year_widths(now)
         except (KeyError, ValueError) as e:
             per[sid] = {"stale": True,
