@@ -471,10 +471,15 @@ def diff_vs_candidate(evaluation: dict, candidate: dict | None) -> dict:
 # ---------------------------------------------------------------------------
 
 def reference_snapshot(conn, reference: str,
-                       hypothesis: str | None) -> dict:
+                       hypothesis: str | None,
+                       exclude: set[str] | None = None) -> dict:
     """Freeze the reference so later previews re-score against the same
-    chronology the experimenter saw when drafting the correction."""
-    ref_yw, meta = analysis.build_reference(conn, reference, hypothesis)
+    chronology the experimenter saw when drafting the correction.
+
+    ``exclude`` is forwarded to :func:`analysis.build_reference` (used by
+    stability checks to leave the check target out of the master)."""
+    ref_yw, meta = analysis.build_reference(conn, reference, hypothesis,
+                                            exclude=exclude)
     return {"meta": meta,
             "years": {str(y): ref_yw[y] for y in sorted(ref_yw)}}
 

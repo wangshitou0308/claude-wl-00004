@@ -19,16 +19,30 @@ sample placed in a hypothesis, choosing
                           position (± years)
 
 The system slices the *adopted* year mapping (lock or adopted correction
-draft) into overlapping windows.  Missing years keep their zero width
-and participate in the statistics; false rings never received a calendar
-year and therefore never enter them.  Every window is compared against
-the chosen reference (the master chronology or one designated sample) at
-the current position and at each neighbouring shift; Pearson
-correlation, sign agreement and shared narrow years are reported per
-shift, and shifts scoring within ``tolerance`` of the best are kept side
-by side.  When at least ``run_threshold`` consecutive windows favour the
-same non-zero displacement, the affected interval is flagged together
-with the measurement sequence numbers involved.
+draft) into overlapping windows; the final window's ``end_year`` is
+clamped to the last year actually present in the mapping, so no window
+or flag ever reports years the mapping does not have.  Missing years
+keep their zero width and participate in the statistics; false rings
+never received a calendar year and therefore never enter them.  Every
+window is compared against the chosen reference at the current position
+and at each neighbouring shift; Pearson correlation, sign agreement and
+shared narrow years are reported per shift, and shifts scoring within
+``tolerance`` of the best are kept side by side.  Only shifts sharing at
+least ``min_valid_years`` common years with the reference may conclude
+anything: a window where *no* shift qualifies is marked
+``insufficient_coverage`` with the best overlap as evidence.
+
+The reference must be independent of the check target.  Against the
+master chronology the target itself is always excluded
+(leave-one-out); a designated reference sample must not be a check
+target (``E_SELF_REFERENCE``).  A target left without any independent
+reference members is skipped, and when no target can be checked at all
+the check is refused (``E_NO_INDEPENDENT_REFERENCE``) -- there is no
+such thing as a stability conclusion without an independent reference.
+
+When at least ``run_threshold`` consecutive windows favour the same
+non-zero displacement, the affected interval is flagged together with
+the measurement sequence numbers involved.
 
 A check never mutates anything: locks, correction drafts and the stored
 series stay untouched.  The parameters, the adopted sample mappings and
@@ -170,7 +184,10 @@ def cut_windows(mapping: list[dict], window: int, step: int) -> list[dict]:
 
     Missing years keep their zero width and stay in the rows; false
     rings never received a calendar year, so they cannot appear.  The
-    final window may be shorter than ``window`` when the mapping ends.
+    final window may be shorter than ``window`` when the mapping ends;
+    its ``end_year`` is clamped to the last year actually present, so
+    windows (and the flags derived from them) never report years the
+    mapping does not have.
     """
     years = [m["year"] for m in mapping]
     if not years:
@@ -188,7 +205,7 @@ def cut_windows(mapping: list[dict], window: int, step: int) -> list[dict]:
             out.append({
                 "window_index": index,
                 "start_year": start,
-                "end_year": end,
+                "end_year": rows[-1]["year"],   # clamp to years that exist
                 "n_years": len(rows),
                 "n_valid": len(rows),   # every mapped year participates
                 "rows": rows,
@@ -205,14 +222,19 @@ def cut_windows(mapping: list[dict], window: int, step: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def score_window(rows: list[dict], ref_yw: dict, ref_narrow: set, *,
-                 search_radius: int, narrow_z: float, narrow_q: float,
+                 search_radius: int, min_valid_years: int,
+                 narrow_z: float, narrow_q: float,
                  tolerance: float) -> dict:
     """Slide one window around its current position.
 
     Shift ``d`` means: the sample years of this window would have to
     move by ``+d`` years to match the reference (``d = 0`` is the locked
-    position).  Shifts within ``tolerance`` of the best correlation are
-    kept side by side in ``tied_shifts``.
+    position).  Only shifts sharing at least ``min_valid_years`` common
+    years with the reference are qualified to conclude anything; shifts
+    scoring within ``tolerance`` of the best qualified correlation are
+    kept side by side in ``tied_shifts``.  ``sufficient`` is False when
+    no shift qualifies -- the per-shift candidates are still returned as
+    evidence of *why* the window cannot be judged.
     """
     years = [r["year"] for r in rows]
     widths = [r["width"] for r in rows]
@@ -239,19 +261,24 @@ def score_window(rows: list[dict], ref_yw: dict, ref_narrow: set, *,
             cand["n_narrow_hits"] = len(hits)
         candidates.append(cand)
 
-    scored = [c for c in candidates if c["correlation"] is not None]
+    qualified = [c for c in candidates
+                 if c["n_overlap"] >= min_valid_years
+                 and c["correlation"] is not None]
     best_shift = None
     tied: list[int] = []
-    if scored:
+    if qualified:
         # best correlation first; near-ties prefer the smaller |shift|
-        scored.sort(key=lambda c: (-c["correlation"], abs(c["shift"]),
-                                   c["shift"]))
-        best = scored[0]
+        qualified.sort(key=lambda c: (-c["correlation"], abs(c["shift"]),
+                                      c["shift"]))
+        best = qualified[0]
         best_shift = best["shift"]
-        tied = sorted(c["shift"] for c in scored
+        tied = sorted(c["shift"] for c in qualified
                       if c["correlation"] >= best["correlation"] - tolerance)
     current = next(c for c in candidates if c["shift"] == 0)
-    return {"best_shift": best_shift, "tied_shifts": tied,
+    return {"sufficient": bool(qualified),
+            "max_overlap": max((c["n_overlap"] for c in candidates),
+                               default=0),
+            "best_shift": best_shift, "tied_shifts": tied,
             "current": current, "candidates": candidates}
 
 
@@ -313,6 +340,23 @@ def detect_flags(sample_id: str, windows: list[dict],
 # Check creation
 # ---------------------------------------------------------------------------
 
+def _is_master(reference) -> bool:
+    return reference in (None, "", "master", "MASTER", "@master")
+
+
+def _reference_snapshot_for(conn, reference: str, hypothesis: str,
+                            sample_id: str) -> dict:
+    """Frozen reference for one target sample.
+
+    Against the master chronology the target itself is excluded
+    (leave-one-out): a stability check must never compare a sample with
+    a chronology it belongs to.
+    """
+    exclude = {sample_id} if _is_master(reference) else None
+    return corrections.reference_snapshot(conn, reference, hypothesis,
+                                          exclude=exclude)
+
+
 def create_check(conn, *, hypothesis: str, sample_id: str | None = None,
                  reference: str = "master", window: int = DEFAULT_WINDOW,
                  step: int = DEFAULT_STEP,
@@ -335,15 +379,42 @@ def create_check(conn, *, hypothesis: str, sample_id: str | None = None,
             "E_NO_TARGETS",
             f"hypothesis {hypothesis!r} has no locked or corrected "
             f"samples to check")])
-
-    snapshot = corrections.reference_snapshot(conn, reference, hypothesis)
-    ref_yw = corrections.snapshot_year_widths(snapshot)
-    if not ref_yw:
+    master = _is_master(reference)
+    if not master and reference in targets and len(targets) == 1:
         raise StabilityError([_err(
-            "E_EMPTY_REFERENCE",
-            f"reference {reference!r} is empty under hypothesis "
-            f"{hypothesis!r}; nothing to compare against")])
-    ref_narrow = analysis.narrow_years(ref_yw, z=narrow_z, quantile=narrow_q)
+            "E_SELF_REFERENCE",
+            f"reference {reference!r} is the check target itself; a "
+            f"sample cannot be stability-checked against its own "
+            f"series -- choose master or an independent reference "
+            f"sample")])
+
+    # One frozen reference per target.  Against the master chronology the
+    # target itself is always excluded (leave-one-out); a target left
+    # without any independent reference is skipped, never "checked"
+    # against itself.
+    snapshots: dict[str, dict] = {}
+    skipped: dict[str, str] = {}
+    for sid in targets:
+        if not master and sid == reference:
+            skipped[sid] = (
+                f"target is the designated reference {reference!r} "
+                f"itself; no independent reference to compare against")
+            continue
+        snap = _reference_snapshot_for(conn, reference, hypothesis, sid)
+        if not snap["years"]:
+            skipped[sid] = (
+                "no independent reference members remain after "
+                "excluding the target from the master chronology"
+                if master else
+                f"reference {reference!r} has no dated years")
+            continue
+        snapshots[sid] = snap
+    checked = [sid for sid in targets if sid in snapshots]
+    if not checked:
+        raise StabilityError([_err(
+            "E_NO_INDEPENDENT_REFERENCE",
+            "no independent reference members remain for any check "
+            "target; a stability conclusion is impossible")])
 
     sample_maps: dict[str, dict] = {}
     all_windows: list[dict] = []
@@ -352,7 +423,14 @@ def create_check(conn, *, hypothesis: str, sample_id: str | None = None,
         adopted = adopted_mapping(conn, hypothesis, sid)
         if adopted is None:
             raise KeyError(f"sample not found: {sid}")
+        if sid in skipped:
+            sample_maps[sid] = {**adopted, "skipped": True,
+                                "reason": skipped[sid]}
+            continue
         sample_maps[sid] = adopted
+        ref_yw = corrections.snapshot_year_widths(snapshots[sid])
+        ref_narrow = analysis.narrow_years(ref_yw, z=narrow_z,
+                                           quantile=narrow_q)
         windows = []
         for w in cut_windows(adopted["mapping"], window, step):
             rec = {"sample_id": sid,
@@ -371,12 +449,31 @@ def create_check(conn, *, hypothesis: str, sample_id: str | None = None,
                                f"{min_valid_years}; comparison skipped"),
                     "best_shift": None, "tied_shifts": [],
                     "current": None, "candidates": []})
+                windows.append(rec)
+                continue
+            scored = score_window(w["rows"], ref_yw, ref_narrow,
+                                  search_radius=search_radius,
+                                  min_valid_years=min_valid_years,
+                                  narrow_z=narrow_z, narrow_q=narrow_q,
+                                  tolerance=tolerance)
+            if not scored["sufficient"]:
+                rec.update({
+                    "status": "insufficient_coverage",
+                    "reason": (f"no shift within ±{search_radius} yr "
+                               f"reaches min_valid_years "
+                               f"{min_valid_years} common years with "
+                               f"the reference (best overlap "
+                               f"{scored['max_overlap']}); comparison "
+                               f"skipped"),
+                    "best_shift": None, "tied_shifts": [],
+                    "current": scored["current"],
+                    "candidates": scored["candidates"]})
             else:
-                scored = score_window(w["rows"], ref_yw, ref_narrow,
-                                      search_radius=search_radius,
-                                      narrow_z=narrow_z, narrow_q=narrow_q,
-                                      tolerance=tolerance)
-                rec.update({"status": "ok", "reason": None, **scored})
+                rec.update({"status": "ok", "reason": None,
+                            "best_shift": scored["best_shift"],
+                            "tied_shifts": scored["tied_shifts"],
+                            "current": scored["current"],
+                            "candidates": scored["candidates"]})
             windows.append(rec)
         all_windows.extend(windows)
         all_flags.extend(detect_flags(sid, windows, run_threshold))
@@ -389,7 +486,7 @@ def create_check(conn, *, hypothesis: str, sample_id: str | None = None,
               "narrow_z": narrow_z, "narrow_q": narrow_q}
     check_id = db.save_stability_check(
         conn, hypothesis=hypothesis, sample_id=sample_id,
-        reference=reference, params=params, note=note, snapshot=snapshot,
+        reference=reference, params=params, note=note, snapshot=snapshots,
         sample_maps=sample_maps, windows=all_windows, flags=all_flags)
     return check_detail(conn, check_id)
 
@@ -411,27 +508,44 @@ def _mapping_equal(a: list[dict], b: list[dict]) -> bool:
 
 
 def _reference_status(conn, row: dict) -> dict:
-    snap = corrections.snapshot_year_widths(row["snapshot"])
-    try:
-        now_yw, _meta = analysis.build_reference(conn, row["reference"],
-                                                 row["hypothesis"])
-    except (KeyError, ValueError) as e:
-        return {"stale": True,
-                "reason": (f"reference {row['reference']!r} can no "
-                           f"longer be built ({e}); the results are "
-                           f"scored against the snapshot frozen at "
-                           f"creation")}
-    if _same_yw(snap, now_yw):
-        return {"stale": False, "reason": None}
-    return {"stale": True,
-            "reason": ("the live reference differs from the frozen "
-                       "snapshot (locks or corrections changed since "
-                       "creation); the results are scored against the "
-                       "snapshot")}
+    """Frozen per-target snapshots vs the references as they are now."""
+    per = {}
+    for sid in sorted(row["snapshot"]):
+        frozen = corrections.snapshot_year_widths(row["snapshot"][sid])
+        try:
+            now = _reference_snapshot_for(conn, row["reference"],
+                                          row["hypothesis"], sid)
+            now_yw = corrections.snapshot_year_widths(now)
+        except (KeyError, ValueError) as e:
+            per[sid] = {"stale": True,
+                        "reason": (f"reference {row['reference']!r} can "
+                                   f"no longer be built ({e}); the "
+                                   f"results are scored against the "
+                                   f"snapshot frozen at creation")}
+            continue
+        if _same_yw(frozen, now_yw):
+            per[sid] = {"stale": False, "reason": None}
+        else:
+            per[sid] = {"stale": True,
+                        "reason": ("the live reference differs from the "
+                                   "frozen snapshot (locks or "
+                                   "corrections changed since "
+                                   "creation); the results are scored "
+                                   "against the snapshot")}
+    stale = any(p["stale"] for p in per.values())
+    reasons = [f"{sid}: {p['reason']}" for sid, p in per.items()
+               if p["stale"]]
+    return {"stale": stale,
+            "reason": "; ".join(reasons) if reasons else None,
+            "per_sample": per}
 
 
 def _mapping_status(conn, row: dict, sample_id: str) -> dict:
     snap = row["sample_maps"].get(sample_id)
+    if snap and snap.get("skipped"):
+        return {"stale": False, "skipped": True,
+                "placement": snap.get("placement"),
+                "reason": snap["reason"]}
     current = adopted_mapping(conn, row["hypothesis"], sample_id)
     if current is None:
         return {"stale": True,
@@ -476,6 +590,9 @@ def check_detail(conn, check_id: int, *, filters: dict | None = None
     flags = row["flags"]
     if f.get("sample_id"):
         flags = [fl for fl in flags if fl["sample_id"] == f["sample_id"]]
+    skipped = [{"sample_id": sid, "reason": m["reason"]}
+               for sid, m in sorted(row["sample_maps"].items())
+               if m.get("skipped")]
     return {
         "check_id": row["check_id"],
         "hypothesis": row["hypothesis"],
@@ -485,6 +602,7 @@ def check_detail(conn, check_id: int, *, filters: dict | None = None
         "note": row["note"],
         "created_at": row["created_at"],
         "targets": sorted(row["sample_maps"]),
+        "skipped_targets": skipped,
         "n_windows": len(row["windows"]),
         "n_ok": sum(1 for w in row["windows"] if w["status"] == "ok"),
         "n_insufficient": sum(1 for w in row["windows"]
@@ -577,11 +695,12 @@ def check_report(conn, check_id: int) -> dict:
         "generated_at": db.now_iso(),
         "check": {k: detail[k] for k in
                   ("check_id", "hypothesis", "sample_id", "reference",
-                   "params", "note", "created_at", "targets", "n_windows",
-                   "n_ok", "n_insufficient", "n_flags",
+                   "params", "note", "created_at", "targets",
+                   "skipped_targets", "n_windows", "n_ok",
+                   "n_insufficient", "n_flags",
                    "reference_status", "mapping_status",
                    "read_only_note")},
-        "reference_snapshot": row["snapshot"],
+        "reference_snapshots": row["snapshot"],
         "sample_maps": row["sample_maps"],
         "windows": row["windows"],
         "flags": row["flags"],

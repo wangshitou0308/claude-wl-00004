@@ -627,7 +627,7 @@ OPENAPI = json.loads(r"""
             "description": "假设不存在，或样本在该假设中无锁定/校正映射"
           },
           "422": {
-            "description": "参数越界（E_PARAM）或假设内无可检查样本（E_NO_TARGETS）"
+            "description": "参数越界（E_PARAM）、假设内无可检查样本（E_NO_TARGETS）、参照即目标自身（E_SELF_REFERENCE）或排除目标后无独立参照成员（E_NO_INDEPENDENT_REFERENCE）"
           }
         }
       },
@@ -1237,7 +1237,7 @@ OPENAPI = json.loads(r"""
       },
       "StabilityCheck": {
         "type": "object",
-        "description": "局部稳定性检查请求。针对假设中已锁定（或已采用校正）的样本：按采用后的年份映射切出 window 年、步长 step 的重叠窗口，缺失年保留零宽参与统计、伪环不参与；每个窗口在当前位置 ±search_radius 内与参照（master 或指定样本）滑动比对，列出各偏移的 Pearson 相关、符号一致率与共同极窄环，分数接近（tolerance 内）的偏移并列保留；相邻窗口连续 run_threshold 个偏向同一非零位移时标出疑似错位区间与测量序号。检查只读：覆盖不足或参照版本失效时只说明依据，不改锁定或校正草案。",
+        "description": "局部稳定性检查请求。针对假设中已锁定（或已采用校正）的样本：按采用后的年份映射切出 window 年、步长 step 的重叠窗口（尾窗 end_year 收窄到映射实际最大年份），缺失年保留零宽参与统计、伪环不参与；每个窗口在当前位置 ±search_radius 内与参照滑动比对，仅共同年份达到 min_valid_years 的偏移才参与结论，全部偏移都不足时该窗口标记 insufficient_coverage 并给出最佳共同年数作为依据。参照为 master 时按 leave-one-out 排除被检查样本自身（防止自证）；指定参照不得为被检查目标（E_SELF_REFERENCE），目标被排除后无独立参照成员时 422（E_NO_INDEPENDENT_REFERENCE）。相邻窗口连续 run_threshold 个偏向同一非零位移时标出疑似错位区间与测量序号。检查只读：不改锁定或校正草案。",
         "properties": {
           "hypothesis": {
             "type": "string",
@@ -1541,11 +1541,18 @@ leave-one-out 相关低于 weak_correlation（默认 0.3）。</li>
   "run_threshold":3,"search_radius":3,"tolerance":0.05}'</pre>
 <p>系统按<b>采用后的年份映射</b>（锁定 offset 或已采用校正草案的分段映射）切出
 <code>window</code> 年、步长 <code>step</code> 的重叠窗口：<b>缺失年保留零宽</b>参与统计，
-<b>伪环不参与</b>（无日历年）。每个窗口在当前位置 <code>±search_radius</code> 年内与参照
+<b>伪环不参与</b>（无日历年）；尾窗的 <code>end_year</code> 收窄到映射实际存在的最大年份，
+疑似错位区间不会延伸到不存在的年份。每个窗口在当前位置 <code>±search_radius</code> 年内与参照
 （<code>master</code> 或指定样本）滑动比对，逐偏移列出 Pearson 相关、符号一致率与共同极窄环；
-与最高相关差值在 <code>tolerance</code> 内的偏移<b>并列保留</b>（<code>tied_shifts</code>）。
-窗口有效年数不足 <code>min_valid_years</code> 时标记
-<code>insufficient_coverage</code> 并说明依据，不做比对。</p>
+与最高相关差值在 <code>tolerance</code> 内的偏移<b>并列保留</b>（<code>tied_shifts</code>）。</p>
+<p><b>参照必须独立</b>：参照为 <code>master</code> 时按 <b>leave-one-out</b> 排除被检查样本自身
+（快照 meta 的 <code>excluded_samples</code> 可见），杜绝相关值约 1 的自证结果；指定参照样本不能是
+被检查目标本身（<code>E_SELF_REFERENCE</code> 422），全假设检查中作为参照的样本自动列入
+<code>skipped_targets</code> 并说明原因。目标被排除后若不再有任何独立参照成员，创建即
+422（<code>E_NO_INDEPENDENT_REFERENCE</code>）——没有独立参照就不给出稳定性结论。</p>
+<p><b>覆盖不足只给依据</b>：窗口有效年数不足 <code>min_valid_years</code>，或所有偏移与参照的
+共同年份都不足 <code>min_valid_years</code> 时，该窗口标记 <code>insufficient_coverage</code>
+并在 <code>reason</code> 中给出依据（映射年数或最佳共同年数），不下结论。</p>
 <p>相邻窗口连续 <code>run_threshold</code> 个偏向<b>同一非零位移</b>时，在
 <code>flags</code> 中标出疑似错位区间（起止年份）与涉及的<b>测量序号</b>
 （<code>seq_start..seq_end</code>）。shift=+d 表示该区间应整体向晚年方向移动 d 年。</p>

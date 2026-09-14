@@ -90,7 +90,8 @@ def known_start_conflicts(known: dict[str, int | None],
 
 
 def build_reference(conn, reference: str,
-                    hypothesis: str | None = None
+                    hypothesis: str | None = None,
+                    exclude: set[str] | None = None
                     ) -> tuple[dict[int, float], dict]:
     """Return ``(year_widths, meta)`` for a dated series or the master.
 
@@ -98,8 +99,18 @@ def build_reference(conn, reference: str,
     (width / sample mean) of every placed sample.  Its values are not
     physical widths, but their year-to-year signs/magnitudes are what the
     correlation statistics need.
+
+    ``exclude`` drops samples from the master chronology (leave-one-out
+    stability checks must never compare a sample with a chronology it
+    belongs to); excluding the designated reference series itself is an
+    error.
     """
+    exclude = exclude or set()
     if reference not in (None, "", "master", "MASTER", "@master"):
+        if reference in exclude:
+            raise ValueError(
+                f"reference series {reference!r} cannot be excluded from "
+                f"its own reference")
         s = db.get_series(conn, reference)
         if s is None:
             raise KeyError(f"reference series not found: {reference}")
@@ -139,7 +150,11 @@ def build_reference(conn, reference: str,
                                                              hypothesis)
     years, per_year = set(), defaultdict(list)
     members = []
+    excluded = []
     for sid, off in placements.items():
+        if sid in exclude:
+            excluded.append(sid)
+            continue
         s = db.get_series(conn, sid)
         if sid in corr_maps:
             yw = corrected_year_widths(corr_maps[sid])
@@ -161,6 +176,8 @@ def build_reference(conn, reference: str,
             "n_years": len(years),
             "known_start_conflicts":
                 known_start_conflicts(known, locks)}
+    if excluded:
+        meta["excluded_samples"] = sorted(excluded)
     return ({y: statistics.fmean(per_year[y]) for y in sorted(years)}, meta)
 
 

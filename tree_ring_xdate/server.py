@@ -706,7 +706,7 @@ _ENDPOINT_HELP = [
     {"method": "GET", "path": "/api/corrections/{id}/download",
      "description": "草案完整 JSON 导出（含来源运行、参照快照与全部版本）"},
     {"method": "POST", "path": "/api/stability",
-     "description": "对已锁定样本或整个假设发起局部稳定性检查：按采用后的年份映射切重叠窗口（缺失年零宽参与、伪环不参与），各窗口在当前位置 ±search_radius 内与参照滑动比对；参数 window/step/min_valid_years/run_threshold/search_radius/tolerance 均可调"},
+     "description": "对已锁定样本或整个假设发起局部稳定性检查：按采用后的年份映射切重叠窗口（缺失年零宽参与、伪环不参与，尾窗收窄到实际最大年份），各窗口在当前位置 ±search_radius 内与参照滑动比对；master 参照按 leave-one-out 排除被检查样本自身，参照即目标（E_SELF_REFERENCE）或无独立参照成员（E_NO_INDEPENDENT_REFERENCE）时 422；窗口共同年份不足 min_valid_years 时只给依据不下结论"},
     {"method": "GET", "path": "/api/stability",
      "description": "列出检查作业（可按 hypothesis、sample_id 过滤）"},
     {"method": "GET", "path": "/api/stability/{id}",

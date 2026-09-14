@@ -899,11 +899,15 @@ class TestStability(ServerTestBase):
             self.assertIn("sign_agreement", cur)
             self.assertIn("narrow_hits", cur)
             self.assertIn("n_narrow_hits", cur)
+        # the mapping ends at 2009: the tail window must not report
+        # years beyond it
+        self.assertEqual(chk["windows"][-1]["end_year"], 2009)
         # one flag spanning the whole series, localised by seq
         self.assertEqual(len(chk["flags"]), 1)
         fl = chk["flags"][0]
         self.assertEqual(fl["shift"], -2)
         self.assertEqual(fl["start_year"], 1950)
+        self.assertEqual(fl["end_year"], 2009)   # clamped, not 2019
         self.assertEqual(fl["seq_start"], 1)
         self.assertEqual(fl["seq_end"], 60)
         self.assertIn("UNKNOWN_01", fl["message"])
@@ -984,6 +988,76 @@ class TestStability(ServerTestBase):
         # the lock was not touched
         st, h, _ = self.request("/api/hypotheses/H1")
         self.assertEqual(h["locks"][0]["offset"], 1948)
+
+    def test_reference_overlap_shortfall_is_explained(self):
+        # a short designated reference: no window keeps enough common
+        # years at any shift, so no window may claim status=ok
+        rows = ["sample_id,unit,start_year,year,width,missing",
+                "REF_SHORT,mm,2000,,1.2,0"] + [",,,,1.1,0"] * 7
+        st, body, _ = self.request("/api/series", "POST",
+                                   raw="\n".join(rows) + "\n",
+                                   ctype="text/csv")
+        self.assertEqual(st, 201, body)
+        self._lock(1948)
+        st, chk, _ = self._check(reference="REF_SHORT")
+        self.assertEqual(st, 201, chk)
+        self.assertEqual(chk["n_ok"], 0)
+        self.assertEqual(chk["n_insufficient"], chk["n_windows"])
+        self.assertEqual(chk["n_flags"], 0)
+        for w in chk["windows"]:
+            self.assertEqual(w["status"], "insufficient_coverage")
+            self.assertIn("min_valid_years", w["reason"])
+            self.assertIn("common years", w["reason"])
+            self.assertIsNone(w["best_shift"])
+            # the evidence is kept: per-shift overlap is visible
+            self.assertTrue(w["candidates"])
+            self.assertTrue(all(c["n_overlap"] < 10
+                                for c in w["candidates"]))
+
+    def test_master_reference_excludes_check_target(self):
+        # leave-one-out: the master snapshot must not contain the target
+        self._lock(1948)
+        st, chk, _ = self._check()
+        self.assertEqual(st, 201, chk)
+        st, report, _ = self.request(
+            f"/api/stability/{chk['check_id']}/download")
+        meta = report["reference_snapshots"]["UNKNOWN_01"]["meta"]
+        self.assertEqual(meta["excluded_samples"], ["UNKNOWN_01"])
+        member_ids = [m["sample_id"] for m in meta["members"]]
+        self.assertNotIn("UNKNOWN_01", member_ids)
+        self.assertIn("SITE_A01", member_ids)
+
+    def test_no_independent_reference_members_422(self):
+        # delete every dated sample: UNKNOWN_01 remains the only placed
+        # series, so a leave-one-out master would be empty
+        for sid in ("SITE_A01", "SITE_A02", "SITE_B01", "SITE_B02",
+                    "SITE_C01", "SITE_C02"):
+            self.request(f"/api/series/{sid}", "DELETE")
+        self._lock(1948)
+        st, body, _ = self._check()
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"],
+                         "E_NO_INDEPENDENT_REFERENCE")
+
+    def test_self_reference_rejected(self):
+        self._lock(1948)
+        st, body, _ = self._check(reference="UNKNOWN_01")
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_SELF_REFERENCE")
+
+    def test_reference_sample_among_targets_is_skipped(self):
+        self._lock(1948)
+        self._lock(1901, sid="SITE_A01")
+        st, chk, _ = self._check(sample_id=None, reference="SITE_A01")
+        self.assertEqual(st, 201, chk)
+        skipped = chk["skipped_targets"]
+        self.assertEqual([s["sample_id"] for s in skipped], ["SITE_A01"])
+        self.assertIn("reference", skipped[0]["reason"])
+        # only the independent target was actually checked
+        self.assertEqual({w["sample_id"] for w in chk["windows"]},
+                         {"UNKNOWN_01"})
+        ms = chk["mapping_status"]["SITE_A01"]
+        self.assertTrue(ms["skipped"])
 
     def test_stale_reference_only_explains(self):
         self._lock(1948)
@@ -1114,7 +1188,15 @@ class TestStability(ServerTestBase):
         self.assertIn("attachment", hdr["Content-Disposition"])
         self.assertEqual(report["report_type"], "tree_ring_stability_check")
         self.assertEqual(report["check"]["check_id"], cid)
-        self.assertTrue(report["reference_snapshot"]["years"])
+        snaps = report["reference_snapshots"]
+        self.assertIn("UNKNOWN_01", snaps)
+        self.assertTrue(snaps["UNKNOWN_01"]["years"])
+        # leave-one-out: the target is excluded from its own master
+        meta = snaps["UNKNOWN_01"]["meta"]
+        self.assertEqual(meta["excluded_samples"], ["UNKNOWN_01"])
+        member_ids = [m["sample_id"] for m in meta["members"]]
+        self.assertNotIn("UNKNOWN_01", member_ids)
+        self.assertIn("SITE_A01", member_ids)
         self.assertIn("UNKNOWN_01", report["sample_maps"])
         self.assertEqual(len(report["windows"]), chk["n_windows"])
         self.assertEqual(len(report["flags"]), 1)
