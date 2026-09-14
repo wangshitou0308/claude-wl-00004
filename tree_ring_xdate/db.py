@@ -813,7 +813,7 @@ def create_standardization(conn, *, name: str, hypothesis: str,
         conn.execute(
             """INSERT INTO standardization_versions (std_id, version, config,
                    note, created_at)
-               VALUES (1, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?)""",
             (std_id, 1, json.dumps(config, ensure_ascii=False), note, ts),
         )
     return std_id

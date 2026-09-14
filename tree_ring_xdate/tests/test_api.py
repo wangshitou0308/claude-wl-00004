@@ -1218,6 +1218,464 @@ class TestStability(ServerTestBase):
         self.assertIn("StabilityCheck", spec["components"]["schemas"])
 
 
+class TestStandardizations(ServerTestBase):
+    """Sequence-standardization plans: lifecycle, fits and pinning."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(EXAMPLES, "samples.csv"),
+                  encoding="utf-8") as f:
+            cls.csv = f.read()
+
+    def setUp(self):
+        super().setUp()
+        st, body, _ = self.request("/api/series", "POST", raw=self.csv,
+                                   ctype="text/csv")
+        self.assertEqual(st, 201, body)
+        self.request("/api/hypotheses", "POST", body={"name": "H1"})
+        # SITE_A01 carries an explicit known start; lock the undated core
+        self.request("/api/hypotheses/H1/locks", "POST",
+                     body={"sample_id": "UNKNOWN_01", "offset": 1948})
+        self.request("/api/hypotheses/H1/locks", "POST",
+                     body={"sample_id": "SITE_A01", "offset": 1901})
+
+    def _create(self, samples, name="STD1", **kw):
+        body = {"name": name, "hypothesis": "H1", "samples": samples}
+        body.update(kw)
+        return self.request("/api/standardizations", "POST", body=body)
+
+    # -- creation / preview ------------------------------------------------
+    def test_create_plan_persists_and_previews_all_methods(self):
+        st, plan, _ = self._create([
+            {"sample_id": "SITE_A01", "method": "mean"},
+            {"sample_id": "UNKNOWN_01", "method": "moving_average",
+             "parameters": {"window": 11}}])
+        self.assertEqual(st, 201, plan)
+        self.assertEqual(plan["status"], "draft")
+        self.assertEqual(plan["version"], 1)
+        self.assertEqual(plan["standardization_id"], 1)
+        samples = {s["sample_id"]: s for s in plan["preview"]["samples"]}
+        self.assertTrue(plan["preview"]["all_valid"])
+        mean = samples["SITE_A01"]
+        # horizontal mean: every expected value equals one constant
+        consts = {c["expected"] for c in mean["curve"]}
+        self.assertEqual(len(consts), 1)
+        # missing ring keeps index 0; positive indices average to ~1
+        zero = [r for r in mean["rows"] if r["width"] == 0]
+        self.assertTrue(all(r["index"] == 0 for r in zero))
+        positives = [r["index"] for r in mean["rows"] if r["width"] > 0]
+        self.assertAlmostEqual(sum(positives) / len(positives), 1.0, 6)
+        ma = samples["UNKNOWN_01"]
+        self.assertEqual(ma["method"], "moving_average")
+        self.assertEqual(ma["diagnostics"]["window"], 11)
+        # persisted: GET returns the same plan
+        st, got, _ = self.request("/api/standardizations/1")
+        self.assertEqual(st, 200)
+        self.assertEqual(got["name"], "STD1")
+        st, lst, _ = self.request("/api/standardizations")
+        self.assertEqual([p["id"] for p in lst["standardizations"]], [1])
+        self.assertEqual(lst["standardizations"][0]["n_samples"], 2)
+
+    def test_negative_exponential_fit(self):
+        st, plan, _ = self._create([
+            {"sample_id": "SITE_A01", "method": "negative_exponential"}])
+        self.assertEqual(st, 201, plan)
+        s = plan["preview"]["samples"][0]
+        self.assertTrue(s["valid"], s.get("error"))
+        p = s["diagnostics"]["parameters"]
+        self.assertLessEqual(p["b_per_year"], 0)          # strictly declining
+        self.assertGreater(p["d"], 0)
+        self.assertGreater(s["diagnostics"]["r_squared"], 0.0)
+        # expected curve is non-increasing and positive everywhere
+        curve = [c["expected"] for c in s["curve"]]
+        self.assertTrue(all(v > 0 for v in curve))
+        self.assertTrue(all(a >= b - 1e-9
+                            for a, b in zip(curve, curve[1:])))
+
+    def test_moving_average_truncation_diagnostic(self):
+        # a window longer than the series reaches beyond the edges
+        st, plan, _ = self._create([
+            {"sample_id": "UNKNOWN_01", "method": "moving_average",
+             "parameters": {"window": 21}}])
+        self.assertEqual(st, 201)
+        d = plan["preview"]["samples"][0]["diagnostics"]
+        self.assertGreater(d["n_truncated_edge_positions"], 0)
+
+    def test_preview_adhoc_does_not_create_version(self):
+        st, plan, _ = self._create([
+            {"sample_id": "SITE_A01", "method": "mean"}])
+        st, prev, _ = self.request(
+            "/api/standardizations/1/preview", "POST",
+            body={"samples": [
+                {"sample_id": "SITE_A01",
+                 "method": "negative_exponential"}]})
+        self.assertEqual(st, 200, prev)
+        self.assertTrue(prev["ad_hoc"])
+        self.assertEqual(prev["preview"]["samples"][0]["method"],
+                         "negative_exponential")
+        st, versions, _ = self.request("/api/standardizations/1/versions")
+        self.assertEqual([v["version"] for v in versions["versions"]], [1])
+
+    # -- per-sample failures, never an automatic method switch ------------
+    def test_too_few_valid_points_localizes_seqs(self):
+        # two positive points + one missing ring
+        csv_text = ("sample_id,unit,start_year,year,width,missing\n"
+                    "SHORT,mm,2000,,1.1,0\nSHORT,,,,0,1\nSHORT,,,,1.3,0\n")
+        self.request("/api/series", "POST", raw=csv_text, ctype="text/csv")
+        self.request("/api/hypotheses/H1/locks", "POST",
+                     body={"sample_id": "SHORT", "offset": 2000})
+        st, plan, _ = self._create([
+            {"sample_id": "SHORT", "method": "mean"}])
+        self.assertEqual(st, 201)             # drafts may hold bad samples
+        s = plan["preview"]["samples"][0]
+        self.assertFalse(s["valid"])
+        err = s["error"]
+        self.assertEqual(err["code"], "E_TOO_FEW_VALID_POINTS")
+        self.assertEqual(err["sample_id"], "SHORT")
+        self.assertEqual(err["seq"], 2)       # first missing ring
+        self.assertEqual(err["seqs"], [1, 3])  # valid points located
+        self.assertEqual(err["missing_seqs"], [2])
+        self.assertEqual(err["n_valid"], 2)
+        # validation gate refuses and keeps the chosen method
+        st, body, _ = self.request("/api/standardizations/1/validate",
+                                   "POST", body={})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"],
+                         "E_TOO_FEW_VALID_POINTS")
+        st, got, _ = self.request("/api/standardizations/1")
+        self.assertEqual(got["status"], "draft")
+
+    def test_window_too_short_localizes_seq(self):
+        # 4 dense points with a window-3 centred MA: the two edge points
+        # keep only 2 neighbours (< 3) inside their window
+        csv_text = ("sample_id,unit,start_year,year,width,missing\n"
+                    + "".join(f"S4,mm,2000,,{1.0 + 0.01 * i},0\n" if i == 0
+                              else f",,,,{1.0 + 0.01 * i},0\n"
+                              for i in range(4)))
+        self.request("/api/series", "POST", raw=csv_text, ctype="text/csv")
+        self.request("/api/hypotheses/H1/locks", "POST",
+                     body={"sample_id": "S4", "offset": 2000})
+        st, plan, _ = self._create([
+            {"sample_id": "S4", "method": "moving_average",
+             "parameters": {"window": 3}}])
+        err = plan["preview"]["samples"][0]["error"]
+        self.assertEqual(err["code"], "E_WINDOW_TOO_SHORT")
+        self.assertEqual(err["sample_id"], "S4")
+        self.assertIsNotNone(err["seq"])
+        self.assertIn(err["seq"], err["seqs"])
+        self.assertEqual(err["method"], "moving_average")
+
+    def test_bad_method_and_window_shape_rejected(self):
+        st, body, _ = self._create([
+            {"sample_id": "SITE_A01", "method": "polynomial"}])
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_STD_METHOD")
+        st, body, _ = self.request("/api/standardizations", "POST",
+            body={"name": "BAD", "hypothesis": "H1", "samples": [
+                {"sample_id": "SITE_A01", "method": "moving_average",
+                 "parameters": {"window": 10}}]})   # even window
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_STD_PARAM")
+        st, body, _ = self.request("/api/standardizations", "POST",
+            body={"name": "BAD2", "hypothesis": "H1", "samples": [
+                {"sample_id": "SITE_A01", "method": "moving_average",
+                 "parameters": {"window": 2}}]})   # too small
+        self.assertEqual(st, 422)
+
+    def test_duplicate_sample_choice_rejected(self):
+        st, body, _ = self.request("/api/standardizations", "POST",
+            body={"name": "DUP", "hypothesis": "H1", "samples": [
+                {"sample_id": "SITE_A01", "method": "mean"},
+                {"sample_id": "SITE_A01", "method": "mean"}]})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"],
+                         "E_STD_DUPLICATE_SAMPLE")
+
+    def test_sample_without_mapping_is_preview_error(self):
+        # SITE_A02 is ingested but neither locked nor corrected in H1
+        st, plan, _ = self._create([
+            {"sample_id": "SITE_A02", "method": "mean"}])
+        self.assertEqual(st, 201)
+        err = plan["preview"]["samples"][0]["error"]
+        self.assertEqual(err["code"], "E_NO_MAPPING")
+        self.assertEqual(err["sample_id"], "SITE_A02")
+
+    def test_unknown_sample_and_hypothesis_404(self):
+        st, body, _ = self.request("/api/standardizations", "POST",
+            body={"name": "X", "hypothesis": "H1", "samples": [
+                {"sample_id": "GHOST", "method": "mean"}]})
+        self.assertEqual(st, 404)
+        st, body, _ = self.request("/api/standardizations", "POST",
+            body={"name": "X", "hypothesis": "NOPE", "samples": [
+                {"sample_id": "SITE_A01", "method": "mean"}]})
+        self.assertEqual(st, 404)
+
+    # -- versions / validation / adopt / retire ---------------------------
+    def test_validate_adopt_freeze_and_retire_lifecycle(self):
+        st, plan, _ = self._create([
+            {"sample_id": "SITE_A01", "method": "mean"}])
+        st, val, _ = self.request("/api/standardizations/1/validate",
+                                  "POST", body={})
+        self.assertEqual(st, 200, val)
+        self.assertEqual(val["status"], "validated")
+        # adopt freezes source mapping + curves
+        st, ad, _ = self.request("/api/standardizations/1/adopt",
+                                 "POST", body={})
+        self.assertEqual(st, 200, ad)
+        self.assertEqual(ad["status"], "adopted")
+        self.assertEqual(ad["adopted_version"], 1)
+        self.assertTrue(ad["preview"]["frozen"])
+        s = ad["preview"]["samples"][0]
+        self.assertTrue(s["frozen"])
+        self.assertEqual(s["placement"], "lock")
+        # double adopt refused; frozen plan cannot be edited
+        st, body, _ = self.request("/api/standardizations/1/adopt",
+                                   "POST", body={})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_STD_ADOPTED")
+        st, body, _ = self.request("/api/standardizations/1/versions",
+                                   "POST",
+                                   body={"samples": [
+                                       {"sample_id": "SITE_A01",
+                                        "method": "mean"}]})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_STD_IMMUTABLE")
+        st, rt, _ = self.request("/api/standardizations/1/retire",
+                                 "POST", body={})
+        self.assertEqual(st, 200)
+        self.assertEqual(rt["status"], "retired")
+
+    def test_new_version_resets_validated_to_draft_and_compares(self):
+        st, _, _ = self._create([
+            {"sample_id": "SITE_A01", "method": "mean"}])
+        self.request("/api/standardizations/1/validate", "POST", body={})
+        st, v2, _ = self.request("/api/standardizations/1/versions",
+                                 "POST", body={"samples": [
+                                     {"sample_id": "SITE_A01",
+                                      "method": "negative_exponential"}]})
+        self.assertEqual(st, 201)
+        self.assertEqual(v2["version"], 2)
+        self.assertEqual(v2["status"], "draft")
+        st, cmp_, _ = self.request("/api/standardizations/1/compare",
+                                   a=1, b=2)
+        self.assertEqual(st, 200)
+        self.assertEqual(len(cmp_["samples_changed"]), 1)
+        ch = cmp_["samples_changed"][0]
+        self.assertEqual((ch["method_a"], ch["method_b"]),
+                         ("mean", "negative_exponential"))
+        self.assertTrue(ch["method_changed"])
+        self.assertEqual(cmp_["methods_a"], ["mean"])
+        self.assertEqual(cmp_["methods_b"], ["negative_exponential"])
+
+    def test_validate_blocks_adoption_when_any_sample_fails(self):
+        st, plan, _ = self._create([
+            {"sample_id": "SITE_A01", "method": "mean"},
+            {"sample_id": "UNKNOWN_01", "method": "moving_average",
+             "parameters": {"window": 3}}])
+        # force a failing short sample into the same plan
+        csv_text = ("sample_id,unit,start_year,year,width,missing\n"
+                    "SHORT,mm,2000,,1.1,0\nSHORT,,,,0,1\nSHORT,,,,1.3,0\n")
+        self.request("/api/series", "POST", raw=csv_text, ctype="text/csv")
+        self.request("/api/hypotheses/H1/locks", "POST",
+                     body={"sample_id": "SHORT", "offset": 2000})
+        st, v2, _ = self.request("/api/standardizations/1/versions",
+                                 "POST", body={"samples": [
+                                     {"sample_id": "SITE_A01",
+                                      "method": "mean"},
+                                     {"sample_id": "SHORT",
+                                      "method": "mean"}]})
+        self.assertEqual(st, 201)
+        st, body, _ = self.request("/api/standardizations/1/adopt",
+                                   "POST", body={"version": 2})
+        self.assertEqual(st, 422)
+        self.assertTrue(any(e["code"] == "E_TOO_FEW_VALID_POINTS"
+                            for e in body["errors"]))
+        st, got, _ = self.request("/api/standardizations/1")
+        self.assertEqual(got["status"], "draft")
+
+    # -- downstream pinning ------------------------------------------------
+    def _adopted_plan(self):
+        st, _, _ = self._create([
+            {"sample_id": "SITE_A01", "method": "negative_exponential"},
+            {"sample_id": "UNKNOWN_01", "method": "mean"}])
+        self.request("/api/standardizations/1/validate", "POST", body={})
+        st, ad, _ = self.request("/api/standardizations/1/adopt",
+                                 "POST", body={})
+        self.assertEqual(st, 200, ad)
+        return ad
+
+    def test_master_and_chronology_pin_adopted_version(self):
+        ad = self._adopted_plan()
+        st, master, _ = self.request(
+            "/api/master", hypothesis="H1", standardization_id=1)
+        self.assertEqual(st, 200, master)
+        self.assertTrue(master["meta"]["standardized"])
+        self.assertEqual(master["meta"]["standardization_id"], 1)
+        self.assertEqual(master["meta"]["standardization_version"], 1)
+        member_ids = {m["sample_id"] for m in master["meta"]["members"]}
+        self.assertEqual(member_ids, {"SITE_A01", "UNKNOWN_01"})
+        self.assertTrue(all(m["standardized"]
+                            for m in master["meta"]["members"]))
+        st, chrono, _ = self.request(
+            "/api/hypotheses/H1/chronology", standardization_id=1)
+        self.assertTrue(chrono["standardized"])
+        self.assertEqual(chrono["standardization_id"], 1)
+        self.assertEqual(set(chrono["standardized_samples"]),
+                         {"SITE_A01", "UNKNOWN_01"})
+        # without the pin the chronology keeps the old raw-width basis
+        st, raw, _ = self.request("/api/hypotheses/H1/chronology")
+        self.assertFalse(raw["standardized"])
+        self.assertIsNone(raw["standardization_id"])
+
+    def test_crossdate_and_run_pin_standardization(self):
+        self._adopted_plan()
+        st, cd, _ = self.request("/api/crossdate", "POST", body={
+            "sample_id": "UNKNOWN_01", "hypothesis": "H1",
+            "offset_min": 1940, "offset_max": 1956, "min_overlap": 30,
+            "standardization_id": 1})
+        self.assertEqual(st, 200, cd)
+        self.assertTrue(cd["reference_meta"]["standardized"])
+        self.assertEqual(cd["params"]["standardization_id"], 1)
+        self.assertEqual(cd["params"]["standardization_version"], 1)
+        self.assertTrue(cd["candidates"])
+        # the run keeps the basis it was created with
+        st, runs, _ = self.request("/api/runs")
+        self.assertEqual(runs["runs"][0]["standardization_id"], 1)
+        # an un-pinned run stays on the raw basis
+        st, cd2, _ = self.request("/api/crossdate", "POST", body={
+            "sample_id": "UNKNOWN_01", "hypothesis": "H1",
+            "offset_min": 1940, "offset_max": 1956, "min_overlap": 30})
+        self.assertIsNone(cd2["params"]["standardization_id"])
+
+    def test_stability_check_pins_standardization(self):
+        self._adopted_plan()
+        st, chk, _ = self.request("/api/stability", "POST", body={
+            "hypothesis": "H1", "sample_id": "UNKNOWN_01",
+            "window": 20, "step": 10, "min_valid_years": 10,
+            "run_threshold": 2, "search_radius": 4,
+            "standardization_id": 1})
+        self.assertEqual(st, 201, chk)
+        self.assertEqual(chk["params"]["standardization_id"], 1)
+        self.assertEqual(chk["params"]["standardization_version"], 1)
+        self.assertTrue(chk["windows"])
+        # the frozen reference snapshot was built from standardized indices
+        snap = chk["reference_status"]
+        self.assertFalse(snap["stale"])
+
+    def test_non_adopted_plan_cannot_back_calculations(self):
+        st, _, _ = self._create([
+            {"sample_id": "SITE_A01", "method": "mean"}])
+        st, body, _ = self.request(
+            "/api/master", hypothesis="H1", standardization_id=1)
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_STD_NOT_ADOPTED")
+
+    def test_old_jobs_keep_raw_basis_after_plan_retired(self):
+        # raw chronology values before standardization
+        st, before, _ = self.request("/api/hypotheses/H1/chronology")
+        raw_vals = [(y["year"], y["mean_index"]) for y in before["yearly"]]
+        self._adopted_plan()
+        st, _, _ = self.request("/api/standardizations/1/retire",
+                                "POST", body={})
+        # the un-pinned chronology is byte-for-byte the raw calculation
+        st, after, _ = self.request("/api/hypotheses/H1/chronology")
+        self.assertEqual(
+            [(y["year"], y["mean_index"]) for y in after["yearly"]],
+            raw_vals)
+        # and the retired pin can no longer be attached
+        st, body, _ = self.request(
+            "/api/hypotheses/H1/chronology", standardization_id=1)
+        self.assertEqual(st, 422)
+
+    def test_correction_mapping_is_standardized_with_provenance(self):
+        # adopt a correction draft for UNKNOWN_01 (gap + false ring),
+        # then standardize against the corrected mapping
+        st, cd, _ = self.request("/api/crossdate", "POST", body={
+            "sample_id": "UNKNOWN_01", "offset_min": 1900,
+            "offset_max": 1990, "min_overlap": 30})
+        offset = cd["candidates"][0]["offset"]
+        st, draft, _ = self.request("/api/corrections", "POST", body={
+            "sample_id": "UNKNOWN_01", "offset": offset,
+            "run_id": cd["run_id"], "min_overlap": 10,
+            "events": [{"type": "missing_ring", "after_seq": 20},
+                       {"type": "false_ring", "seq": 35}]})
+        did = draft["draft_id"]
+        st, _, _ = self.request(f"/api/corrections/{did}/adopt",
+                                "POST", body={"hypothesis": "H1"})
+        self.assertEqual(st, 200)
+        st, plan, _ = self._create([
+            {"sample_id": "UNKNOWN_01", "method": "mean"}], name="STDC")
+        s = plan["preview"]["samples"][0]
+        self.assertTrue(s["valid"], s.get("error"))
+        self.assertEqual(s["placement"], "correction")
+        self.assertEqual(s["correction_versions"],
+                         [{"draft_id": did, "adopted_version": 1}])
+        # the false ring (seq 35) never got a year: no row carries seq 35
+        seqs = {r["seq"] for r in s["rows"]}
+        self.assertNotIn(35, seqs)
+        # the inserted missing year keeps a zero index
+        inserted = [r for r in s["rows"] if r["role"] == "inserted_missing"]
+        self.assertTrue(inserted)
+        self.assertTrue(all(r["index"] == 0 for r in inserted))
+
+    # -- export / docs -----------------------------------------------------
+    def test_download_report_and_freeze_evidence(self):
+        st, _, _ = self._create([
+            {"sample_id": "SITE_A01", "method": "negative_exponential"}])
+        self.request("/api/standardizations/1/validate", "POST", body={})
+        self.request("/api/standardizations/1/adopt", "POST", body={})
+        st, report, hdr = self.request(
+            "/api/standardizations/1/download")
+        self.assertEqual(st, 200)
+        self.assertIn("attachment", hdr["Content-Disposition"])
+        self.assertEqual(report["report_type"],
+                         "tree_ring_standardization")
+        self.assertEqual(report["plan"]["status"], "adopted")
+        v1 = report["versions"][0]
+        self.assertTrue(v1["preview"]["frozen"])
+        s = v1["preview"]["samples"][0]
+        self.assertTrue(s["frozen"])
+        json.dumps(report, allow_nan=False)
+        st, _, hdr = self.request(
+            "/api/standardizations/1/download", download=0)
+        self.assertNotIn("Content-Disposition", hdr)
+
+    def test_help_openapi_and_root_page_advertise_standardization(self):
+        st, help_, _ = self.request("/api/help")
+        paths = {e["path"] for e in help_["endpoints"]}
+        for p in ("/api/standardizations",
+                  "/api/standardizations/{id}/adopt",
+                  "/api/standardizations/{id}/compare?a=&b=",
+                  "/api/standardizations/{id}/download"):
+            self.assertIn(p, paths)
+        st, spec, _ = self.request("/api/openapi.json")
+        for p in ("/api/standardizations",
+                  "/api/standardizations/{id}",
+                  "/api/standardizations/{id}/preview",
+                  "/api/standardizations/{id}/versions",
+                  "/api/standardizations/{id}/validate",
+                  "/api/standardizations/{id}/adopt",
+                  "/api/standardizations/{id}/retire",
+                  "/api/standardizations/{id}/compare",
+                  "/api/standardizations/{id}/download"):
+            self.assertIn(p, spec["paths"], p)
+        self.assertIn("StdSampleChoice", spec["components"]["schemas"])
+        self.assertIn("StandardizationCreate",
+                      spec["components"]["schemas"])
+        # pinning documented on the downstream calculations
+        cd_params = {p["name"] for p in
+                     spec["paths"]["/api/crossdate"]["get"]["parameters"]}
+        self.assertIn("standardization_id", cd_params)
+        self.assertIn("standardization_version", cd_params)
+        # root HTML manual
+        import urllib.request
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{self.port}/") as resp:
+            html = resp.read().decode("utf-8")
+        self.assertIn("序列标准化方案", html)
+        self.assertIn("/api/standardizations", html)
+
+
 class TestDocs(unittest.TestCase):
     def test_openapi_is_self_describing(self):
         from tree_ring_xdate.docs import OPENAPI, HTML_DOCS

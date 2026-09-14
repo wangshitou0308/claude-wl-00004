@@ -248,6 +248,24 @@ OPENAPI = json.loads(r"""
               "type": "string"
             },
             "description": "参照主年表时纳入的锁定假设"
+          },
+          {
+            "name": "standardization_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用标准化方案 id（别名 standardization）；指定后主年表/参照按其冻结轮宽指数构建，目标样本若在方案内则用其指数曲线，运行结果记录该版本"
+          },
+          {
+            "name": "standardization_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
           }
         ],
         "responses": {
@@ -264,6 +282,24 @@ OPENAPI = json.loads(r"""
         "responses": {
           "200": {
             "description": "候选偏移列表"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "standardization_id": {
+                    "type": "integer",
+                    "description": "已采用标准化方案 id（别名 standardization）；指定后主年表/参照按其冻结轮宽指数构建，目标样本若在方案内则用其指数曲线，运行结果记录该版本（body 字段，别名 standardization）"
+                  },
+                  "standardization_version": {
+                    "type": "integer",
+                    "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1004,6 +1040,24 @@ OPENAPI = json.loads(r"""
               "type": "number",
               "default": 0.3
             }
+          },
+          {
+            "name": "standardization_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用标准化方案 id（别名 standardization）；指定后主年表/参照按其冻结轮宽指数构建，目标样本若在方案内则用其指数曲线，运行结果记录该版本"
+          },
+          {
+            "name": "standardization_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
           }
         ],
         "responses": {
@@ -1113,6 +1167,24 @@ OPENAPI = json.loads(r"""
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "standardization_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用标准化方案 id（别名 standardization）；指定后主年表/参照按其冻结轮宽指数构建，目标样本若在方案内则用其指数曲线，运行结果记录该版本"
+          },
+          {
+            "name": "standardization_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
           }
         ],
         "responses": {
@@ -1136,6 +1208,24 @@ OPENAPI = json.loads(r"""
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "standardization_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用标准化方案 id（别名 standardization）；指定后主年表/参照按其冻结轮宽指数构建，目标样本若在方案内则用其指数曲线，运行结果记录该版本"
+          },
+          {
+            "name": "standardization_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
           }
         ],
         "responses": {
@@ -1151,6 +1241,454 @@ OPENAPI = json.loads(r"""
         "responses": {
           "200": {
             "description": "help"
+          }
+        }
+      }
+    },
+    "/api/standardizations": {
+      "get": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "列出序列标准化方案（?status=&hypothesis= 过滤）",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "validated",
+                "adopted",
+                "retired"
+              ]
+            }
+          },
+          {
+            "name": "hypothesis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "方案列表"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "创建标准化方案（draft，版本1）：逐样本选择水平均值/负指数曲线/固定窗口居中移动平均",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StandardizationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "方案已创建并返回最新版本预览（逐样本期望生长曲线与轮宽指数）"
+          },
+          "404": {
+            "description": "假设或样本不存在"
+          },
+          "409": {
+            "description": "同名方案已存在（E_STD_EXISTS）"
+          },
+          "422": {
+            "description": "配置结构错误（方法名/移动窗口参数/重复样本）；样本级拟合问题只在预览中标记 valid=false，不阻止建草案"
+          }
+        }
+      }
+    },
+    "/api/standardizations/{id}": {
+      "get": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "方案详情与指定版本预览（?version=N，默认最新；已采用版本返回冻结曲线）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "方案元数据、config 与逐样本曲线/指数/诊断"
+          },
+          "404": {
+            "description": "方案或版本不存在"
+          }
+        }
+      }
+    },
+    "/api/standardizations/{id}/preview": {
+      "get": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "按 ?version=N 预览期望生长曲线与轮宽指数（默认最新版本）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "预览"
+          },
+          "404": {
+            "description": "方案或版本不存在"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "临时试算候选 samples（不生成版本）；也可在 body 带 version 预览已有版本",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "samples": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/StdSampleChoice"
+                    }
+                  },
+                  "version": {
+                    "type": "integer"
+                  }
+                },
+                "description": "samples 给出时为临时试算（ad_hoc=true），不写入任何版本"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "试算结果"
+          },
+          "422": {
+            "description": "配置或逐样本校验失败"
+          }
+        }
+      }
+    },
+    "/api/standardizations/{id}/versions": {
+      "get": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "列出方案全部版本（含是否已冻结来源映射/曲线）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "版本列表"
+          },
+          "404": {
+            "description": "方案不存在"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "以新 samples 配置生成新版本（adopted/retired 不可改；编辑 validated 方案回到 draft）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "samples"
+                ],
+                "properties": {
+                  "samples": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/StdSampleChoice"
+                    }
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "新版本已创建"
+          },
+          "404": {
+            "description": "方案或样本不存在"
+          },
+          "422": {
+            "description": "配置错误或方案已采用/停用（E_STD_IMMUTABLE）"
+          }
+        }
+      }
+    },
+    "/api/standardizations/{id}/validate": {
+      "post": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "全样本校验：全部通过后 draft->validated，否则 422 并逐样本返回测量序号（不自动更换算法）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "全部样本通过（方案转为 validated）"
+          },
+          "404": {
+            "description": "方案或版本不存在"
+          },
+          "422": {
+            "description": "存在未通过样本：E_TOO_FEW_VALID_POINTS / E_EXP_NOT_CONVERGED / E_EXPECTED_NONPOSITIVE / E_WINDOW_TOO_SHORT / E_NO_MAPPING，errors 逐项带 sample_id、method 与 seq/seqs"
+          }
+        }
+      }
+    },
+    "/api/standardizations/{id}/adopt": {
+      "post": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "采用方案：全样本校验通过后冻结来源映射（含校正版本）、参数与拟合曲线（仅 adopted 版本可被主年表/滑动匹配/稳定性检查指定）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "description": "默认最新版本"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "方案已采用（status=adopted，版本被冻结）"
+          },
+          "404": {
+            "description": "方案或版本不存在"
+          },
+          "422": {
+            "description": "存在未通过样本、方案已采用（E_STD_ADOPTED）或已停用（E_STD_RETIRED）"
+          }
+        }
+      }
+    },
+    "/api/standardizations/{id}/retire": {
+      "post": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "停用方案（retired 不可再改或再采用；已引用该版本的旧作业仍保留原计算依据）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "方案已停用"
+          },
+          "404": {
+            "description": "方案不存在"
+          },
+          "422": {
+            "description": "方案已是 retired（E_STD_RETIRED）"
+          }
+        }
+      }
+    },
+    "/api/standardizations/{id}/compare": {
+      "get": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "比较两个方案版本：样本增删、方法/参数变化与拟合诊断（?a=&b=）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "a",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "b",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "版本差异"
+          },
+          "404": {
+            "description": "方案或任一端点版本不存在"
+          }
+        }
+      }
+    },
+    "/api/standardizations/{id}/download": {
+      "get": {
+        "tags": [
+          "standardization"
+        ],
+        "summary": "方案完整 JSON 导出（全部版本、冻结来源映射、期望曲线、指数与诊断；?download=0 取消附件头）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "download",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON 报告（Content-Disposition 附件）"
+          },
+          "404": {
+            "description": "方案不存在"
           }
         }
       }
@@ -1292,13 +1830,84 @@ OPENAPI = json.loads(r"""
           },
           "note": {
             "type": "string"
+          },
+          "standardization_id": {
+            "type": "integer",
+            "description": "已采用标准化方案 id（别名 standardization）；指定后主年表/参照按其冻结轮宽指数构建，目标样本若在方案内则用其指数曲线，运行结果记录该版本"
+          },
+          "standardization_version": {
+            "type": "integer",
+            "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
           }
         },
         "required": [
           "hypothesis"
         ]
       },
-      "Payload": {        "type": "object",
+      "StdSampleChoice": {
+        "type": "object",
+        "description": "一个样本的去趋势选择。method=mean 水平均值（无需参数）；negative_exponential 负指数曲线 a0*exp(b*(year-origin_year))+d（b<=0，阻尼 Gauss-Newton 拟合，不收敛返回 E_EXP_NOT_CONVERGED 且不更换算法）；moving_average 固定窗口居中移动平均，parameters.window 必须为 >=3 的奇数，窗口内有效点不足 3 个时返回 E_WINDOW_TOO_SHORT 并定位 seq。缺失环保留零宽（指数记 0），伪环不分配日历年、不参与拟合。",
+        "properties": {
+          "sample_id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "mean",
+              "negative_exponential",
+              "moving_average"
+            ]
+          },
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "window": {
+                "type": "integer",
+                "minimum": 3,
+                "description": "moving_average 专用：居中窗口年数，必须为奇数"
+              }
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sample_id",
+          "method"
+        ]
+      },
+      "StandardizationCreate": {
+        "type": "object",
+        "description": "标准化方案创建请求。方案从 hypothesis 当前采用的年份映射（锁定 offset 或已采用校正草案的分段映射）读取年份与校正版本。草案可直接创建；全部样本校验通过（POST .../validate）才能成为 validated，采用（.../adopt）时冻结来源映射、参数、拟合曲线与诊断，之后主年表/滑动匹配/稳定性检查可用 standardization_id(+standardization_version) 指定该版本。",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "方案唯一名（必填）"
+          },
+          "hypothesis": {
+            "type": "string",
+            "description": "提供年份映射的定年假设（必填）"
+          },
+          "note": {
+            "type": "string"
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StdSampleChoice"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "hypothesis",
+          "samples"
+        ]
+      },
+      "Payload": {
+        "type": "object",
         "description": "单样本对象或 {\"samples\": [...]} 批量。CSV 表头列名支持中英别名：sample_id/sample/样本编号, unit/单位, start_year/起始年份, year/年份, width/宽度, missing/缺失环。",
         "properties": {
           "sample_id": {
@@ -1569,15 +2178,65 @@ leave-one-out 相关低于 weak_correlation（默认 0.3）。</li>
 <code>reference_status</code> / <code>mapping_status</code> 只给出 stale 说明（结果仍按创建时
 快照评分），<b>不修改任何锁定或校正草案</b>。覆盖不足同样只说明依据。</div>
 
-<h2>8. 报告与主年表</h2>
+<h2>8. 序列标准化方案 <span class="tag">POST /api/standardizations</span></h2>
+<p>交叉定年与校正确定年份之后，逐样本选择去趋势方法，把原始轮宽转成无量纲<b>轮宽指数</b>
+（宽度 / 期望生长曲线）。一个方案以「选定样本 + 各自的方法和参数」为独立数据，维护
+<code>draft → validated → adopted → retired</code> 状态，每次修改配置都生成不可变版本。</p>
+<pre>curl -X POST localhost:8000/api/standardizations -d '{
+  "name":"STD-2026","hypothesis":"H1",
+  "samples":[
+    {"sample_id":"SITE_A01","method":"negative_exponential"},
+    {"sample_id":"UNKNOWN_01","method":"moving_average",
+     "parameters":{"window":11}},
+    {"sample_id":"SITE_B01","method":"mean"}]}'</pre>
+<table>
+<tr><th>方法</th><th>method</th><th>参数</th><th>期望曲线</th></tr>
+<tr><td>水平均值</td><td><code>mean</code></td><td>—</td><td>全部有效宽度的算术均值（水平线）</td></tr>
+<tr><td>负指数曲线</td><td><code>negative_exponential</code></td><td>—</td>
+<td><code>a0·exp(b·(year−origin))+d</code>（b≤0），阻尼 Gauss-Newton 拟合</td></tr>
+<tr><td>固定窗口居中移动平均</td><td><code>moving_average</code></td>
+<td><code>parameters.window</code>（≥3 的奇数）</td>
+<td>每个日历年取其居中窗口内有效宽度的均值</td></tr></table>
+<p>方案从指定假设<b>当前采用的年份映射</b>读取年份：普通锁定用 offset，已采用校正草案用其分段
+映射（并记录来源校正 draft/version）。<b>缺失环保留零宽</b>（指数记 0、参与统计但不参与拟合），
+<b>伪环不分配日历年、不参与拟合</b>。只有正宽度且已定年的点才是拟合有效点（至少 3 个）。</p>
+<div class="note"><b>不自动更换算法</b>：有效点不足（<code>E_TOO_FEW_VALID_POINTS</code>，返回
+<code>seq</code> 与 <code>seqs</code>/<code>missing_seqs</code> 定位测量位置）、负指数不收敛
+（<code>E_EXP_NOT_CONVERGED</code>）、期望值非正（<code>E_EXPECTED_NONPOSITIVE</code>）或窗口内
+数据不足（<code>E_WINDOW_TOO_SHORT</code>）时，422 逐样本给出<b>样本号与测量序号</b>，保留实验员
+选择的方法，绝不偷偷换成别的曲线。</div>
+<table>
+<tr><th>操作</th><th>请求</th></tr>
+<tr><td>创建方案（draft v1）</td><td>POST /api/standardizations（body 见上）</td></tr>
+<tr><td>方案列表</td><td>GET /api/standardizations?status=draft&amp;hypothesis=H1</td></tr>
+<tr><td>详情/预览版本</td><td>GET /api/standardizations/1 或 ?version=2</td></tr>
+<tr><td>候选配置临时试算</td><td>POST /api/standardizations/1/preview（body 带 samples，不建版本）</td></tr>
+<tr><td>新版本 / 版本列表</td>
+<td>POST /api/standardizations/1/versions {"samples":[...]}；GET 同路径列版本</td></tr>
+<tr><td>全样本校验</td><td>POST /api/standardizations/1/validate（全部通过才 draft→validated）</td></tr>
+<tr><td>采用（冻结）</td><td>POST /api/standardizations/1/adopt（可带 version，默认最新）</td></tr>
+<tr><td>停用</td><td>POST /api/standardizations/1/retire</td></tr>
+<tr><td>版本比较</td><td>GET /api/standardizations/1/compare?a=1&amp;b=2</td></tr>
+<tr><td>JSON 下载</td><td>GET /api/standardizations/1/download（?download=0 取消附件头）</td></tr></table>
+<p><b>采用即冻结</b>：adopt 时再次全样本校验，通过后把来源映射（含校正版本）、参数、每条期望曲线、
+指数与诊断一起冻结到该版本。主年表、滑动匹配与局部稳定性检查都可用
+<code>standardization_id</code>（别名 <code>standardization</code>）+
+<code>standardization_version</code> 指定一个已采用版本：
+<code>GET /api/master?hypothesis=H1&amp;standardization_id=1</code>、
+<code>POST /api/crossdate</code> / <code>POST /api/stability</code> 在 body 带
+<code>{"standardization_id":1}</code>。不传时保持原原始宽度/样本均值口径，<b>旧作业仍保留其计算依据</b>。
+来源映射之后若变化，详情中的 <code>source_status</code> 只给 stale 说明，已冻结指数不变。</p>
+
+<h2>9. 报告与主年表</h2>
 <table>
 <tr><td>下载 JSON 报告</td>
 <td>GET /api/hypotheses/H1/report?download=1</td></tr>
 <tr><td>在线报告</td><td>GET /api/hypotheses/H1/report</td></tr>
 <tr><td>当前主年表</td><td>GET /api/master?hypothesis=H1</td></tr>
+<tr><td>标准化主年表</td><td>GET /api/master?hypothesis=H1&amp;standardization_id=1</td></tr>
 <tr><td>历史滑动结果</td><td>GET /api/runs</td></tr></table>
 
-<h2>9. cURL 速览</h2>
+<h2>10. cURL 速览</h2>
 <pre>curl -X POST localhost:8000/api/series \\
   -H 'Content-Type: text/csv' --data-binary @examples/samples.csv
 curl -X POST localhost:8000/api/hypotheses -d '{"name":"H1"}'
@@ -1590,9 +2249,15 @@ curl -X POST localhost:8000/api/corrections \\
        "events":[{"type":"missing_ring","after_seq":20},
                  {"type":"false_ring","seq":35}]}'
 curl -X POST localhost:8000/api/corrections/1/adopt -d '{"hypothesis":"H1"}'
+curl -X POST localhost:8000/api/standardizations \\
+  -d '{"name":"STD-2026","hypothesis":"H1","samples":[
+       {"sample_id":"SITE_A01","method":"negative_exponential"}]}'
+curl -X POST localhost:8000/api/standardizations/1/validate
+curl -X POST localhost:8000/api/standardizations/1/adopt
 curl -X POST localhost:8000/api/stability \\
-  -d '{"hypothesis":"H1","sample_id":"UNKNOWN_01",
+  -d '{"hypothesis":"H1","sample_id":"UNKNOWN_01","standardization_id":1,
        "window":30,"step":10,"run_threshold":3,"search_radius":3}'
+curl 'localhost:8000/api/master?hypothesis=H1&amp;standardization_id=1'
 curl 'localhost:8000/api/stability/1?shift=-2&amp;status=ok'
 curl 'localhost:8000/api/stability/compare?a=1&amp;b=2'
 curl 'localhost:8000/api/hypotheses/H1/report?download=1' -o report.json</pre>

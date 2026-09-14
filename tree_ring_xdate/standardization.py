@@ -320,13 +320,18 @@ def _solve3(a, b):
 
 
 def _fit_negative_exponential(rows, valid, *, sample_id):
-    """Fit ``a*exp(b*year) + d`` (b <= 0) with damped Gauss-Newton.
+    """Fit ``a0*exp(b*(year-origin_year)) + d`` (b <= 0) with LM.
 
-    The constrained parameters are reparameterised as ``a = exp(p1)``,
-    ``b = -exp(p2)`` (strictly declining), ``d = softplus(p3)``, so every
-    parameter vector stays feasible.  Non-convergence after
-    :data:`MAX_FIT_ITERATIONS` (or an unbounded / non-finite fit) is
-    reported as ``E_EXP_NOT_CONVERGED`` -- no fallback curve is fitted.
+    The design is normalised -- dimensionless time
+    ``u = (year - y0)/span`` and widths ``v = width / mean`` -- so the
+    Gauss-Newton normal equations stay well conditioned.  The model is
+    ``v = A*exp(B*u) + D`` with ``A, D > 0`` and a *strictly negative*
+    ``B`` that can take any magnitude, using the soft-negative map
+    ``B = -softplus(q)`` (so the fitted curve is always non-increasing,
+    per the dendro convention).  Physical parameters are recovered at
+    the end.  Non-convergence after :data:`MAX_FIT_ITERATIONS` (or a
+    non-finite fit) is reported as ``E_EXP_NOT_CONVERGED`` -- the method
+    is never silently replaced.
     """
     years = [float(r["year"]) for r in valid]
     widths = [float(r["width"]) for r in valid]
@@ -334,25 +339,14 @@ def _fit_negative_exponential(rows, valid, *, sample_id):
     span = max(max(years) - y0, 1.0)
     w_mean = statistics.fmean(widths)
 
-    # Normalise the design so Gauss-Newton stays well-conditioned:
-    # dimensionless time u=(year-y0)/span and widths v=width/mean.
-    # Fit v = A*exp(B*u) + D with A,D > 0 and B <= 0 (strictly declining),
-    # then convert back to the physical curve.  B can take any negative
-    # magnitude, so it is kept unconstrained (its sign is forced in the
-    # model) rather than reparameterised through an exponential.
     us = [(y - y0) / span for y in years]
     vs = [w / w_mean for w in widths]
 
-    # initial guess: A ~ 0.25 (v starts ~1.15 and D ~0.9), decline
-    # exp(-0.25) across the span, asymptote D ~ 0.9 of the mean
-    p = [math.log(0.25), -0.25, math.log(math.expm1(0.9))]
-
+    # parameter vector par = (p0 = log A, q (B=-softplus(q)), r=logit D)
     def unpack(par):
         A = math.exp(max(min(par[0], 700), -700))
-        B = -math.exp(max(min(par[1], 700), -700)) if par[1] < 20 \
-            else -par[1]
-        # allow arbitrary negative magnitude through a sign-forced free B:
-        B = -math.exp(max(min(par[1], 700), -700))
+        q = max(min(par[1], 700), -700)
+        B = -math.log1p(math.exp(q))   # -softplus(q): any B < 0
         D = math.log1p(math.exp(max(min(par[2], 700), -700)))
         return A, B, D
 
@@ -364,6 +358,9 @@ def _fit_negative_exponential(rows, valid, *, sample_id):
         return sum((model(par, u) - v) ** 2
                    for u, v in zip(us, vs))
 
+    # start from a gently declining curve with a low asymptote
+    p = [math.log(0.25), math.log(math.expm1(0.25)),
+         math.log(math.expm1(0.9))]
     best_sse = sse(p)
     converged = False
     improved_once = False
@@ -371,33 +368,33 @@ def _fit_negative_exponential(rows, valid, *, sample_id):
     _iteration = 0
     for _iteration in range(MAX_FIT_ITERATIONS):
         A, B, D = unpack(p)
-        # Jacobian of the residual w.r.t. (p1, p2, p3)
+        q = max(min(p[1], 700), -700)
+        dB_dq = -math.exp(q) / (1.0 + math.exp(q))   # -sigmoid(q)
+        dD_dr = 1.0 / (1.0 + math.exp(-max(min(p[2], 700), -700)))
+        # Jacobian of the residual r = v - f w.r.t. (p0, q, r)
         jac, resid = [], []
         for u, v in zip(us, vs):
             e = math.exp(B * u)
             f = A * e + D
-            dA = A * e                 # df / dp1
-            dB = A * e * B * u         # df / dp2 (B = -exp(p2))
-            dD = 1.0 / (1.0 + math.exp(-max(min(p[2], 700), -700)))
+            dA = A * e                  # df/dp0
+            dB = A * e * u * dB_dq      # df/dq
+            dD = dD_dr                  # df/dr
             jac.append([dA, dB, dD])
             resid.append(v - f)
-        jtj = [[sum(jac[r][i] * jac[r][k] for r in range(len(jac)))
-                for k in range(3)] for i in range(3)]
-        jtr = [sum(jac[r][i] * resid[r] for r in range(len(jac)))
+        jtj = [[sum(jac[k][i] * jac[k][j] for k in range(len(jac)))
+                for j in range(3)] for i in range(3)]
+        jtr = [sum(jac[k][i] * resid[k] for k in range(len(jac)))
                for i in range(3)]
-        # scaled gradient: g_i = (J'r)_i / max(1, diag_i) -- the right
-        # convergence measure in the Marquardt-scaled parameter space
+        # scaled gradient (Marquardt-scaled parameter space)
         grad_norm = max(abs(g) / max(1.0, abs(jtj[i][i]))
                         for i, g in enumerate(jtr))
         if grad_norm < GRADIENT_TOLERANCE and improved_once:
             converged = True
             break
-        # Marquardt damping on the *normalised* normal equations so all
-        # three parameters share one scale despite the flat A/D valley
         diag = [math.sqrt(max(jtj[i][i], 1e-300)) for i in range(3)]
 
         def scaled_solve(damping):
-            reg = [[jtj[i][k] / (diag[i] * diag[k]) for k in range(3)]
+            reg = [[jtj[i][j] / (diag[i] * diag[j]) for j in range(3)]
                    for i in range(3)]
             for i in range(3):
                 reg[i][i] += damping
@@ -412,7 +409,6 @@ def _fit_negative_exponential(rows, valid, *, sample_id):
         for _trial in range(40):
             delta = scaled_solve(step_lam)
             if delta is not None:
-                # capped over-relaxation helps traverse shallow valleys
                 scale = 1.0
                 for _relax in range(6):
                     cand = [p[i] + scale * delta[i] for i in range(3)]
@@ -430,16 +426,12 @@ def _fit_negative_exponential(rows, valid, *, sample_id):
                     break
             step_lam *= 10.0
         if solved is None:
-            # no feasible descent direction remains: with a finite fit and
-            # at least one improvement the stationary point is the answer
             converged = improved_once and math.isfinite(best_sse)
             break
         new_p, new_sse, used_scale = solved
         rel = (best_sse - new_sse) / max(best_sse, 1e-300)
         p, best_sse = new_p, new_sse
         improved_once = True
-        # a full step that helped -> trust Gauss-Newton more; a shortened
-        # step -> lean back on steepest descent
         lam = max(lam * (1.0 if used_scale == 1.0 else 3.0) / 5.0, 1e-12)
         if rel < FIT_TOLERANCE:
             converged = True
@@ -456,10 +448,8 @@ def _fit_negative_exponential(rows, valid, *, sample_id):
             sample_id=sample_id, method="negative_exponential",
             extra={"n_valid": len(valid),
                    "iterations": _iteration + 1})])
-    # convert back to physical widths, anchored at the first dated year
-    # (the a*exp(b*year) form itself can overflow for large calendar
-    # years, so the curve is always evaluated from year - origin_year):
-    # f(year) = a0*exp(b*(year-y0)) + d with a0 = w_mean*A
+    # physical curve anchored at the first dated year (a*exp(b*year) with
+    # a calendar-year origin can overflow; always evaluate year - origin)
     b = B / span
     a0 = w_mean * A
     d = w_mean * D
@@ -500,7 +490,6 @@ def _fit_moving_average(rows, valid, *, sample_id, window: int):
     shortened and the method is not replaced.
     """
     half = window // 2
-    by_year = {r["year"]: r for r in rows}
     valid_by_year = {r["year"]: r["width"] for r in valid}
     years = [r["year"] for r in rows]
     y_min, y_max = min(years), max(years)
@@ -554,15 +543,41 @@ def evaluate_sample(source: dict, choice: dict) -> dict:
     rows = dated_rows(source)
     valid = _valid_points(rows)
     if len(valid) < MIN_VALID_POINTS:
+        valid_seqs = [r["seq"] for r in valid if r["seq"] is not None]
+        missing_seqs = [r["seq"] for r in rows
+                        if r["width"] <= 0 and r["seq"] is not None]
+        # ``seq`` points at the first measurement needing a look: the first
+        # missing ring when present (the usual cause), otherwise the first
+        # valid point; ``seqs`` lists every valid point found.
+        anchor_seq = (missing_seqs[0] if missing_seqs
+                      else (valid_seqs[0] if valid_seqs else None))
+        detail = []
+        if valid_seqs:
+            detail.append(f"the {len(valid)} valid point(s) are at "
+                          f"measurement seqs {valid_seqs[:20]}"
+                          f"{' ...' if len(valid_seqs) > 20 else ''}")
+        if missing_seqs:
+            detail.append(f"zero-width missing ring(s) at seqs "
+                          f"{missing_seqs[:20]}"
+                          f"{' ...' if len(missing_seqs) > 20 else ''} "
+                          f"keep zero width and never fit")
+        if source.get("false_rings"):
+            detail.append("false-ring measurement(s) "
+                          f"{[fr['seq'] for fr in source['false_rings']][:20]} "
+                          f"receive no calendar year and never fit")
         raise StandardizationError([_err(
             "E_TOO_FEW_VALID_POINTS",
             f"{sample_id}: only {len(valid)} valid (positive, dated) "
             f"point(s), at least {MIN_VALID_POINTS} are required to fit "
-            f"{method}; missing rings keep zero width and false rings do "
-            f"not fit",
-            sample_id=sample_id, method=method,
+            f"{method}; " + "; ".join(detail),
+            sample_id=sample_id, seq=anchor_seq, method=method,
             extra={"n_valid": len(valid),
-                   "min_valid": MIN_VALID_POINTS})])
+                   "min_valid": MIN_VALID_POINTS,
+                   "seqs": valid_seqs,
+                   "valid_seqs": valid_seqs,
+                   "missing_seqs": missing_seqs,
+                   "false_ring_seqs": [fr["seq"]
+                                       for fr in source.get("false_rings", [])]})])
     if method == "mean":
         curve, diagnostics = _fit_mean(rows, valid, sample_id=sample_id)
     elif method == "negative_exponential":

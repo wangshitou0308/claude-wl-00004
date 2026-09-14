@@ -13,6 +13,9 @@ Modules:
                    (segmented year mapping, preview, adopt, revoke)
     stability   -- local stability checks of locked placements
                    (sliding windows, misplacement flags, read-only)
+    standardization -- per-sample detrending plans (mean / negative
+                   exponential / centred moving average), versioned and
+                   frozen at adoption for chronologies and jobs
     server      -- http.server based HTTP API
     cli         -- command line entry point (``python -m tree_ring_xdate``)
 """
