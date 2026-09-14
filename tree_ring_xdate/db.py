@@ -19,6 +19,12 @@ standardizations   sequence-standardization plans: per-sample detrending
                  methods/parameters, draft|validated|adopted|retired
                  lifecycle, versioned source mapping + parameters and the
                  fitted expected-growth curves and diagnostics
+signal_assessments chronology signal-strength assessments: the frozen
+                 dating hypothesis, optional standardized version, member
+                 sample set and window parameters the assessment rests on,
+                 the per-sample index snapshot (source mapping), per-window
+                 depth/Rbar/EPS evidence (incl. jackknife deltas) and the
+                 adopted reliable interval; draft|completed|adopted|retired
 """
 
 from __future__ import annotations
@@ -199,6 +205,30 @@ CREATE TABLE IF NOT EXISTS standardization_versions (
 
 CREATE INDEX IF NOT EXISTS idx_std_versions
     ON standardization_versions(std_id);
+
+CREATE TABLE IF NOT EXISTS signal_assessments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL UNIQUE,
+    hypothesis      TEXT NOT NULL,   -- dating hypothesis supplying year maps
+    note            TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'draft',
+                                     -- draft | completed | adopted | retired
+    version         INTEGER NOT NULL DEFAULT 1,   -- always 1: assessments are immutable
+    params          TEXT NOT NULL,   -- JSON window/step/min_samples/eps_threshold/...
+    sources         TEXT NOT NULL,   -- JSON frozen per-sample index (source mapping)
+    members         TEXT NOT NULL,   -- JSON ordered member sample ids
+    excluded_samples TEXT NOT NULL DEFAULT '[]',  -- JSON [{sample_id, reason}]
+    windows         TEXT NOT NULL,   -- JSON per-window depth/Rbar/EPS/jackknife
+    reliable_span   TEXT,            -- JSON adopted window/year span (NULL until adopted)
+    adopted_at      TEXT,
+    standardization_id      INTEGER, -- pinned adopted std version (raw basis: NULL)
+    standardization_version INTEGER,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_hyp ON signal_assessments(hypothesis);
+CREATE INDEX IF NOT EXISTS idx_signal_status ON signal_assessments(status);
 """
 
 
@@ -210,7 +240,9 @@ def now_iso() -> str:
 # alters an existing database, so patch older files in place.
 _ADDED_COLUMNS = {
     "runs": [("standardization_id", "INTEGER"),
-             ("standardization_version", "INTEGER")],
+             ("standardization_version", "INTEGER"),
+             ("signal_id", "INTEGER"),
+             ("signal_version", "INTEGER")],
 }
 
 
@@ -371,15 +403,18 @@ def save_run(conn: sqlite3.Connection, sample_id: str, reference: str,
         cur = conn.execute(
             """INSERT INTO runs (sample_id, reference, offset_min, offset_max,
                    min_overlap, narrow_z, narrow_q, tolerance,
-                   standardization_id, standardization_version, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                   standardization_id, standardization_version,
+                   signal_id, signal_version, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 sample_id, reference,
                 params.get("offset_min"), params.get("offset_max"),
                 params["min_overlap"], params["narrow_z"], params["narrow_q"],
                 params["tolerance"],
                 params.get("standardization_id"),
-                params.get("standardization_version"), ts,
+                params.get("standardization_version"),
+                params.get("signal_id"),
+                params.get("signal_version"), ts,
             ),
         )
         run_id = cur.lastrowid
@@ -953,3 +988,116 @@ def mark_standardization_status(conn, std_id: int, status: str, *,
                        updated_at = ? WHERE id = ?""",
                 (status, ts, std_id),
     )
+
+
+# ---------------------------------------------------------------------------
+# Chronology signal-strength assessments
+# ---------------------------------------------------------------------------
+
+SIGNAL_STATUSES = ("draft", "completed", "adopted", "retired")
+
+
+def create_signal_assessment(conn, *, name: str, hypothesis: str,
+                             params: dict, sources: dict, members: list,
+                             excluded_samples: list, windows: list,
+                             note: str = "",
+                             standardization_id: int | None = None,
+                             standardization_version: int | None = None
+                             ) -> int:
+    """Persist one assessment (status draft) with its frozen evidence."""
+    ts = now_iso()
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO signal_assessments (name, hypothesis, note, status,
+                   version, params, sources, members, excluded_samples, windows,
+                   reliable_span, adopted_at, standardization_id,
+                   standardization_version, created_at, updated_at)
+               VALUES (?,?,?, 'draft', 1, ?,?,?,?,?, NULL, NULL, ?,?, ?, ?)""",
+            (name, hypothesis, note,
+             json.dumps(params, ensure_ascii=False),
+             json.dumps(sources, ensure_ascii=False),
+             json.dumps(members, ensure_ascii=False),
+             json.dumps(excluded_samples, ensure_ascii=False),
+             json.dumps(windows, ensure_ascii=False),
+             standardization_id, standardization_version, ts, ts),
+        )
+        return cur.lastrowid
+
+
+def _signal_row(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["assessment_id"] = d.pop("id")
+    for k in ("params", "sources", "members", "excluded_samples", "windows",
+              "reliable_span"):
+        d[k] = json.loads(d[k]) if d[k] is not None else None
+    return d
+
+
+def get_signal_assessment(conn, assessment_id: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM signal_assessments WHERE id = ?", (assessment_id,),
+    ).fetchone()
+    return _signal_row(row) if row else None
+
+
+def get_signal_assessment_by_name(conn, name: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM signal_assessments WHERE name = ?", (name,),
+    ).fetchone()
+    return _signal_row(row) if row else None
+
+
+def list_signal_assessments(conn, *, hypothesis: str | None = None,
+                            status: str | None = None,
+                            sample_id: str | None = None) -> list[dict]:
+    """Lightweight assessment list (per-window evidence is summarised)."""
+    sql = "SELECT * FROM signal_assessments"
+    cond, args = [], []
+    if hypothesis:
+        cond.append("hypothesis = ?")
+        args.append(hypothesis)
+    if status:
+        cond.append("status = ?")
+        args.append(status)
+    if sample_id:
+        cond.append("members LIKE ?")
+        args.append(f'%"{sample_id}"%')
+    if cond:
+        sql += " WHERE " + " AND ".join(cond)
+    sql += " ORDER BY id DESC"
+    out = []
+    for r in conn.execute(sql, args):
+        d = _signal_row(r)
+        d["n_windows"] = len(d["windows"])
+        d["n_pass"] = sum(1 for w in d["windows"] if w["eps_pass"])
+        d["n_members"] = len(d["members"])
+        for k in ("sources", "windows"):
+            d.pop(k)
+        out.append(d)
+    return out
+
+
+def mark_signal_status(conn, assessment_id: int, status: str, *,
+                       reliable_span: dict | None = None) -> None:
+    ts = now_iso()
+    with conn:
+        if status == "adopted":
+            conn.execute(
+                """UPDATE signal_assessments
+                   SET status = ?, reliable_span = ?, adopted_at = ?,
+                       updated_at = ? WHERE id = ?""",
+                (status, json.dumps(reliable_span, ensure_ascii=False),
+                 ts, ts, assessment_id),
+            )
+        elif status == "retired":
+            conn.execute(
+                """UPDATE signal_assessments SET status = ?, updated_at = ?
+                   WHERE id = ?""",
+                (status, ts, assessment_id),
+            )
+        else:
+            conn.execute(
+                """UPDATE signal_assessments SET status = ?, updated_at = ?
+                   WHERE id = ?""",
+                (status, ts, assessment_id),
+            )

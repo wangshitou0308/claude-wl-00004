@@ -103,7 +103,8 @@ def _std_indices(conn, std):
 def build_reference(conn, reference: str,
                     hypothesis: str | None = None,
                     exclude: set[str] | None = None,
-                    std: dict | None = None
+                    std: dict | None = None,
+                    signal: dict | None = None
                     ) -> tuple[dict[int, float], dict]:
     """Return ``(year_widths, meta)`` for a dated series or the master.
 
@@ -119,12 +120,72 @@ def build_reference(conn, reference: str,
     sample.  Missing-ring indices stay zero; false rings never had a
     calendar year.
 
+    When ``signal`` (a resolved *adopted* signal-strength assessment) is
+    given it wins over ``std``: the master is the per-year mean of that
+    assessment's frozen member indices and every year outside the adopted
+    reliable interval is dropped -- a pinned master/run never sees years
+    the assessment did not declare reliable.  A designated reference
+    series is read from the same frozen indices and clipped to the span.
+
     ``exclude`` drops samples from the master chronology (leave-one-out
     stability checks must never compare a sample with a chronology it
     belongs to); excluding the designated reference series itself is an
     error.
     """
+    from . import signal as signal_mod
+
     exclude = exclude or set()
+    if signal is not None:
+        members = signal_mod.signal_member_indices(signal)
+        span = signal_mod.signal_reference_years(signal)
+        if reference not in (None, "", "master", "MASTER", "@master"):
+            if reference in exclude:
+                raise ValueError(
+                    f"reference series {reference!r} cannot be excluded "
+                    f"from its own reference")
+            curve = members.get(reference)
+            if not curve:
+                raise ValueError(
+                    f"reference series {reference!r} is not a member of "
+                    f"adopted signal assessment {signal['id']}")
+            meta = {"type": "series", "sample_id": reference,
+                    "start": min(curve), "end": max(curve),
+                    "n_years": len(curve),
+                    "hypothesis": signal["hypothesis"],
+                    "standardized": True,
+                    "signal_id": signal["id"],
+                    "signal_version": signal["version"],
+                    "reliable_span": signal["reliable_span"]}
+            return dict(curve), meta
+        per_year = defaultdict(list)
+        used = []
+        for sid, curve in members.items():
+            if sid in exclude:
+                continue
+            used.append(sid)
+            for y, v in curve.items():
+                if y in span:
+                    per_year[y].append(v)
+        years = sorted(per_year)
+        meta = {"type": "master",
+                "members": [{"sample_id": sid,
+                             "start": min(members[sid]),
+                             "end": max(members[sid]),
+                             "corrected": False, "standardized": True}
+                            for sid in sorted(used)],
+                "hypothesis": signal["hypothesis"],
+                "start": years[0] if years else None,
+                "end": years[-1] if years else None,
+                "n_years": len(years),
+                "known_start_conflicts": [],
+                "standardized": True,
+                "signal_id": signal["id"],
+                "signal_version": signal["version"],
+                "reliable_span": signal["reliable_span"]}
+        if exclude:
+            meta["excluded_samples"] = sorted(exclude)
+        return ({y: statistics.fmean(per_year[y]) for y in years}, meta)
+
     indices = _std_indices(conn, std)
     if reference not in (None, "", "master", "MASTER", "@master"):
         if reference in exclude:
@@ -320,7 +381,8 @@ def crossdate(conn, sample_id: str, *, reference: str = "master",
               min_overlap: int = 20, narrow_z: float = -1.0,
               narrow_q: float = 0.1, tolerance: float = 0.05,
               top_k: int = 10, hypothesis: str | None = None,
-              std: dict | None = None) -> dict:
+              std: dict | None = None,
+              signal: dict | None = None) -> dict:
     target = db.get_series(conn, sample_id)
     if target is None:
         raise KeyError(f"sample not found: {sample_id}")
@@ -328,14 +390,20 @@ def crossdate(conn, sample_id: str, *, reference: str = "master",
     n = len(t_widths)
 
     ref_yw, ref_meta = build_reference(conn, reference, hypothesis,
-                                       std=std)
-    # A standardized reference expects a dimensionless target: a target
-    # covered by an adopted plan uses its frozen index curve; any other
-    # sample is divided by its own positive mean so the two sides are
-    # comparable.
+                                       std=std, signal=signal)
+    # A standardized (or signal-pinned) reference expects a dimensionless
+    # target: a target covered by the frozen indices uses its index curve;
+    # any other sample is divided by its own positive mean so the two
+    # sides are comparable.  A signal pin restricts both the reference and
+    # the target block to the adopted reliable interval.
+    dimless = std is not None or signal is not None
     indices = _std_indices(conn, std)
-    target_std = indices.get(sample_id) if std is not None else None
-    if std is not None and target_std is None:
+    if signal is not None:
+        from . import signal as signal_mod
+        signal_curves = signal_mod.signal_member_indices(signal)
+        indices = {sid: dict(c) for sid, c in signal_curves.items()}
+    target_std = indices.get(sample_id) if dimless else None
+    if dimless and target_std is None:
         positives = [w for w in t_widths if w > 0]
         mean_w = statistics.fmean(positives) if positives else 1.0
         t_widths = [w / mean_w if w > 0 else 0.0 for w in t_widths]
@@ -393,7 +461,9 @@ def crossdate(conn, sample_id: str, *, reference: str = "master",
               "min_overlap": min_overlap, "narrow_z": narrow_z,
               "narrow_q": narrow_q, "tolerance": tolerance,
               "standardization_id": std["id"] if std else None,
-              "standardization_version": std["version"] if std else None}
+              "standardization_version": std["version"] if std else None,
+              "signal_id": signal["id"] if signal else None,
+              "signal_version": signal["version"] if signal else None}
     return {
         "sample_id": sample_id,
         "reference": reference,
@@ -441,7 +511,8 @@ def _rank_and_select(candidates: list[dict], tolerance: float,
 def build_chronology(conn, hypothesis: str | None = None, *,
                      min_samples: int = 3, outlier_sd: float = 2.0,
                      weak_correlation: float = 0.3,
-                     std: dict | None = None
+                     std: dict | None = None,
+                     signal: dict | None = None
                      ) -> dict:
     """Year-by-year sample count, mean/median index and dispersion.
 
@@ -449,6 +520,10 @@ def build_chronology(conn, hypothesis: str | None = None, *,
     series come from the frozen standardized indices (plan members only,
     no further division by sample mean); otherwise indices are width /
     sample positive mean as before.
+
+    With an adopted signal-strength assessment ``signal`` the chronology
+    is built from that assessment's frozen member indices and clipped to
+    its reliable interval (this takes precedence over ``std``).
 
     Flags:
       LOW_COVERAGE   -- fewer than ``min_samples`` samples that year
@@ -459,6 +534,30 @@ def build_chronology(conn, hypothesis: str | None = None, *,
                         sample correlates weakly with all the others
                         (leave-one-out over the common interval)
     """
+    from . import signal as signal_mod
+
+    if signal is not None:
+        signal_curves = signal_mod.signal_member_indices(signal)
+        span = signal_mod.signal_reference_years(signal)
+        indices = {sid: dict(c) for sid, c in signal_curves.items()}
+        placements = {sid: min(c) for sid, c in indices.items() if c}
+        known, locks, corr_maps = {}, {}, {}
+        per_year = defaultdict(list)
+        sample_yw = {}
+        units = defaultdict(set)
+        for sid, curve in indices.items():
+            s = db.get_series(conn, sid)
+            unit = s["unit"] if s is not None else ""
+            sample_yw[sid] = curve
+            for y, v in curve.items():
+                if y in span:
+                    per_year[y].append((sid, v))
+                    units[y].add(unit)
+        return _assemble_chronology(
+            conn, hypothesis, sorted(per_year), per_year, units, sample_yw,
+            placements, known, locks, corr_maps, min_samples, outlier_sd,
+            weak_correlation, signal=signal)
+
     indices = _std_indices(conn, std)
     placements, known, locks, corr_maps = resolve_placements(conn,
                                                              hypothesis)
@@ -488,8 +587,17 @@ def build_chronology(conn, hypothesis: str | None = None, *,
             value = w if standardized else (w / mean_w if w > 0 else 0.0)
             per_year[y].append((sid, value))
             units[y].add(s["unit"])
+    return _assemble_chronology(
+        conn, hypothesis, sorted(per_year), per_year, units, sample_yw,
+        placements, known, locks, corr_maps, min_samples, outlier_sd,
+        weak_correlation, std=std)
 
-    years = sorted(per_year)
+
+def _assemble_chronology(conn, hypothesis, years, per_year, units, sample_yw,
+                         placements, known, locks, corr_maps, min_samples,
+                         outlier_sd, weak_correlation, *, std=None,
+                         signal=None):
+    """Shared yearly table/flag assembly for raw, std and signal bases."""
     yearly = []
     outliers, unit_mismatches = [], []
     for y in years:
@@ -527,9 +635,16 @@ def build_chronology(conn, hypothesis: str | None = None, *,
         })
 
     conflicts = known_start_conflicts(known, locks)
-    conflicts.extend(_lock_conflicts(conn, placements, sample_yw,
-                                     weak_correlation))
-    return {
+    # LOCK_CONFLICT checks belong to the live-placement views; a signal
+    # assessment supplies its own frozen indices, so that audit is skipped.
+    if signal is None:
+        conflicts.extend(_lock_conflicts(conn, placements, sample_yw,
+                                         weak_correlation))
+    standardized_flag = std is not None or signal is not None
+    standardized_samples = (sorted(sample_yw) if signal is not None
+                            else (sorted(_std_indices(conn, std))
+                                  if std else []))
+    out = {
         "hypothesis": hypothesis,
         "start": years[0] if years else None,
         "end": years[-1] if years else None,
@@ -541,10 +656,10 @@ def build_chronology(conn, hypothesis: str | None = None, *,
         "correction_drafts": {
             sid: sorted({r["draft_id"] for r in corr_maps[sid]})
             for sid in sorted(corr_maps)},
-        "standardized": std is not None,
+        "standardized": standardized_flag,
         "standardization_id": std["id"] if std else None,
         "standardization_version": std["version"] if std else None,
-        "standardized_samples": sorted(indices) if std else [],
+        "standardized_samples": standardized_samples,
         "yearly": yearly,
         "outliers": outliers,
         "unit_mismatches": unit_mismatches,
@@ -555,6 +670,11 @@ def build_chronology(conn, hypothesis: str | None = None, *,
                        "outlier_sd": outlier_sd,
                        "weak_correlation": weak_correlation},
     }
+    if signal is not None:
+        out["signal_id"] = signal["id"]
+        out["signal_version"] = signal["version"]
+        out["reliable_span"] = signal["reliable_span"]
+    return out
 
 
 def _lock_conflicts(conn, placements, sample_yw, weak_r,

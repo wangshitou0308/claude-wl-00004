@@ -1676,6 +1676,356 @@ class TestStandardizations(ServerTestBase):
         self.assertIn("/api/standardizations", html)
 
 
+class TestSignalAssessments(ServerTestBase):
+    """Chronology signal-strength assessments: depth/Rbar/EPS, lifecycle."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(EXAMPLES, "samples.csv"),
+                  encoding="utf-8") as f:
+            cls.csv = f.read()
+
+    def setUp(self):
+        super().setUp()
+        st, body, _ = self.request("/api/series", "POST", raw=self.csv,
+                                   ctype="text/csv")
+        self.assertEqual(st, 201, body)
+        self.request("/api/hypotheses", "POST", body={"name": "H1"})
+        for sid, off in (("SITE_A01", 1901), ("SITE_A02", 1905),
+                         ("SITE_B01", 1920), ("SITE_B02", 1931),
+                         ("SITE_C01", 1940)):
+            self.request("/api/hypotheses/H1/locks", "POST",
+                         body={"sample_id": sid, "offset": off})
+        self.sites = ["SITE_A01", "SITE_A02", "SITE_B01",
+                      "SITE_B02", "SITE_C01"]
+
+    def _create(self, name="SIG1", **kw):
+        body = {"name": name, "hypothesis": "H1",
+                "window": 40, "step": 20, "min_samples": 3,
+                "eps_threshold": 0.85, "min_pair_years": 5}
+        body.update(kw)
+        return self.request("/api/signal", "POST", body=body)
+
+    def _adopt(self, aid, **kw):
+        self.request(f"/api/signal/{aid}/complete", "POST", body={})
+        return self.request(f"/api/signal/{aid}/adopt", "POST", body=kw)
+
+    # -- creation / evidence -----------------------------------------------
+    def test_create_freezes_basis_and_reports_evidence(self):
+        st, a, _ = self._create()
+        self.assertEqual(st, 201, a)
+        self.assertEqual(a["status"], "draft")
+        self.assertEqual(a["members"], self.sites)
+        self.assertEqual(a["excluded_samples"], [])
+        self.assertEqual(a["params"]["window"], 40)
+        self.assertTrue(a["windows"])
+        w = next(x for x in a["windows"] if x["status"] == "ok")
+        self.assertGreaterEqual(w["mean_depth"], 2)
+        self.assertGreater(w["n_valid_pairs"], 0)
+        self.assertEqual(w["n_pairs"], 10)   # C(5,2)
+        self.assertEqual(w["n_pair_correlations"], 10)
+        self.assertTrue(-1.0 <= w["rbar"] <= 1.0)
+        self.assertTrue(0.0 < w["eps"] <= 1.0)
+        self.assertTrue(w["eps_pass"])
+        self.assertIn("eps_formula", w)
+        for p in w["pairs"]:
+            self.assertIn(p["sample_a"], w["participating_samples"])
+            self.assertIn(p["sample_b"], w["participating_samples"])
+        # jackknife recomputes the deltas but never excludes a series
+        self.assertEqual({j["removed_sample"] for j in w["jackknife"]},
+                         set(w["participating_samples"]))
+        for j in w["jackknife"]:
+            self.assertIsNotNone(j["eps_delta"])
+        self.assertFalse(a["source_status"]["stale"])
+
+    def test_evidence_is_persisted_and_filterable(self):
+        st, a, _ = self._create()
+        aid = a["assessment_id"]
+        st, got, _ = self.request(f"/api/signal/{aid}")
+        self.assertEqual(st, 200)
+        self.assertEqual(got["n_windows"], a["n_windows"])
+        st, f1, _ = self.request(f"/api/signal/{aid}", year_from=1980)
+        self.assertTrue(all(w["end_year"] >= 1980 for w in f1["windows"]))
+        st, f2, _ = self.request(f"/api/signal/{aid}", eps_pass=1)
+        self.assertTrue(all(w["eps_pass"] for w in f2["windows"]))
+        st, f3, _ = self.request(f"/api/signal/{aid}",
+                                 sample_id="SITE_C01")
+        self.assertTrue(all("SITE_C01" in w["participating_samples"]
+                            for w in f3["windows"]))
+
+    def test_insufficient_coverage_only_explains(self):
+        st, a, _ = self._create(
+            name="LOW", samples=["SITE_A01", "SITE_A02"], min_samples=3)
+        self.assertEqual(st, 201, a)
+        self.assertTrue(a["windows"])
+        self.assertTrue(all(w["status"] == "insufficient_coverage"
+                            for w in a["windows"]))
+        self.assertIsNone(a["windows"][0]["eps"])
+        self.assertIn("min_samples", a["windows"][0]["reason"])
+
+    def test_no_valid_pairs_only_explains(self):
+        # a pair whose members barely overlap: early windows contain only
+        # one member (coverage), and no window supports a valid pair
+        st, a, _ = self._create(
+            name="NOPAIR", samples=["SITE_A01", "SITE_C01"],
+            window=10, step=10, min_samples=2, min_pair_years=10)
+        self.assertTrue(a["windows"])
+        explained = [w for w in a["windows"] if w["status"] != "ok"]
+        self.assertTrue(explained)
+        for w in explained:
+            self.assertEqual(w["n_valid_pairs"], 0)
+            self.assertIsNone(w["eps"])
+            self.assertIsNotNone(w["reason"])
+
+    def test_zero_variance_pair_is_excluded_not_crash(self):
+        st, a, _ = self._create(
+            name="ZV", samples=["SITE_A01", "SITE_A02", "SITE_B01"],
+            window=60, step=60, min_pair_years=5, min_samples=2)
+        self.assertEqual(st, 201, a)
+        for w in a["windows"]:
+            for p in w["pairs"]:
+                if not p["valid"]:
+                    self.assertIsNotNone(p["reason"])
+
+    def test_jackknife_never_excludes_a_series(self):
+        st, a, _ = self._create()
+        aid = a["assessment_id"]
+        before = {w["window_index"]: w["eps"] for w in a["windows"]}
+        st, got, _ = self.request(f"/api/signal/{aid}")
+        self.assertEqual(got["members"], self.sites)
+        self.assertEqual({w["window_index"]: w["eps"]
+                          for w in got["windows"]}, before)
+
+    # -- lifecycle ----------------------------------------------------------
+    def test_draft_must_complete_before_adopt(self):
+        st, a, _ = self._create()
+        st, body, _ = self.request(
+            f"/api/signal/{a['assessment_id']}/adopt", "POST", body={})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_SIGNAL_DRAFT")
+        st, c, _ = self.request(
+            f"/api/signal/{a['assessment_id']}/complete", "POST", body={})
+        self.assertEqual((st, c["status"]), (200, "completed"))
+
+    def test_adopt_longest_passing_run_and_span_restriction(self):
+        st, a, _ = self._create()
+        st, ad, _ = self._adopt(a["assessment_id"])
+        self.assertEqual((st, ad["status"]), (200, "adopted"))
+        span = ad["reliable_span"]
+        self.assertGreaterEqual(span["n_windows"], 1)
+        self.assertGreaterEqual(span["min_eps"], 0.85 - 1e-9)
+        st, m, _ = self.request("/api/master", hypothesis="H1",
+                                signal_id=a["assessment_id"])
+        self.assertEqual(st, 200, m)
+        self.assertEqual(m["meta"]["signal_id"], a["assessment_id"])
+        self.assertEqual(m["years"][0]["year"], span["start_year"])
+        self.assertEqual(m["years"][-1]["year"], span["end_year"])
+
+    def test_below_threshold_range_cannot_be_adopted(self):
+        st, a, _ = self._create(name="HI", eps_threshold=0.999)
+        self.request(f"/api/signal/{a['assessment_id']}/complete",
+                     "POST", body={})
+        st, body, _ = self.request(
+            f"/api/signal/{a['assessment_id']}/adopt", "POST", body={})
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_NO_RELIABLE_RANGE")
+
+    def test_explicit_windows_must_be_adjacent_and_passing(self):
+        st, a, _ = self._create(eps_threshold=0.5)
+        self.request(f"/api/signal/{a['assessment_id']}/complete",
+                     "POST", body={})
+        passing = sorted(w["window_index"] for w in a["windows"]
+                         if w["eps_pass"])
+        # non-adjacent passing indexes rejected
+        non_adj = passing[:1] + passing[2:]
+        st, body, _ = self.request(
+            f"/api/signal/{a['assessment_id']}/adopt", "POST",
+            body={"windows": non_adj})
+        self.assertEqual(st, 422, body)
+        self.assertEqual(body["errors"][0]["code"],
+                         "E_WINDOWS_NOT_CONSECUTIVE")
+        # an adjacent passing pair is accepted
+        pair = passing[:2]
+        st, ad, _ = self.request(
+            f"/api/signal/{a['assessment_id']}/adopt", "POST",
+            body={"windows": pair})
+        self.assertEqual(st, 200, ad)
+        self.assertEqual(ad["reliable_span"]["window_indexes"], pair)
+
+    def test_retire_blocks_pin_but_old_keeps_range(self):
+        st, a, _ = self._create()
+        st, ad, _ = self._adopt(a["assessment_id"])
+        st, cd, _ = self.request("/api/crossdate", "POST", body={
+            "sample_id": "SITE_C02", "hypothesis": "H1",
+            "offset_min": 1935, "offset_max": 1945, "min_overlap": 20,
+            "signal_id": a["assessment_id"]})
+        self.assertEqual(st, 200, cd)
+        self.assertEqual(cd["params"]["signal_id"], a["assessment_id"])
+        run_pin = cd["run_id"]
+        st, runs, _ = self.request("/api/runs")
+        self.assertEqual(runs["runs"][0]["signal_id"],
+                         a["assessment_id"])
+        st, r, _ = self.request(
+            f"/api/signal/{a['assessment_id']}/retire", "POST", body={})
+        self.assertEqual((st, r["status"]), (200, "retired"))
+        st, body, _ = self.request("/api/master", hypothesis="H1",
+                                   signal_id=a["assessment_id"])
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"],
+                         "E_SIGNAL_NOT_ADOPTED")
+        st, runs, _ = self.request("/api/runs")
+        self.assertEqual(next(x for x in runs["runs"]
+                              if x["id"] == run_pin)["signal_id"],
+                         a["assessment_id"])
+
+    # -- staleness: mark, never recompute ----------------------------------
+    def test_source_change_marks_stale_without_recompute(self):
+        st, a, _ = self._create()
+        aid = a["assessment_id"]
+        frozen_eps = [w["eps"] for w in a["windows"]]
+        self.request("/api/hypotheses/H1/locks", "POST",
+                     body={"sample_id": "SITE_C01", "offset": 1942})
+        st, got, _ = self.request(f"/api/signal/{aid}")
+        self.assertTrue(got["source_status"]["stale"])
+        self.assertTrue(got["source_status"]["per_sample"]
+                        ["SITE_C01"]["stale"])
+        self.assertEqual([w["eps"] for w in got["windows"]], frozen_eps)
+
+    # -- standardization basis ---------------------------------------------
+    def _adopted_std(self):
+        samples = [{"sample_id": s, "method": "mean"} for s in self.sites]
+        st, plan, _ = self.request("/api/standardizations", "POST",
+                                   body={"name": "STD1", "hypothesis": "H1",
+                                         "samples": samples})
+        self.assertEqual(st, 201, plan)
+        pid = plan["standardization_id"]
+        self.request(f"/api/standardizations/{pid}/validate",
+                     "POST", body={})
+        self.request(f"/api/standardizations/{pid}/adopt", "POST", body={})
+        return pid
+
+    def test_assessment_on_frozen_standardized_indices(self):
+        pid = self._adopted_std()
+        st, a, _ = self._create(name="STDSIG", standardization_id=pid)
+        self.assertEqual(st, 201, a)
+        self.assertEqual(a["params"]["standardization_id"], pid)
+        self.assertTrue(a["windows"])
+        st, report, _ = self.request(
+            f"/api/signal/{a['assessment_id']}/download")
+        self.assertTrue(all(s["basis"] == "standardized"
+                            for s in report["sources"].values()))
+        st, body, _ = self._create(
+            name="STDSIG2", standardization_id=pid,
+            samples=self.sites + ["UNKNOWN_01"])
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_STD_NOT_COVERED")
+
+    # -- list / compare / download / validation ----------------------------
+    def test_list_filters(self):
+        self._create(name="A")
+        self._create(name="B")
+        st, lst, _ = self.request("/api/signal")
+        self.assertEqual({x["name"] for x in lst["assessments"]},
+                         {"A", "B"})
+        st, lst, _ = self.request("/api/signal", hypothesis="H1")
+        self.assertEqual(len(lst["assessments"]), 2)
+        st, lst, _ = self.request("/api/signal", sample_id="SITE_C01")
+        self.assertEqual(len(lst["assessments"]), 2)
+        st, lst, _ = self.request("/api/signal", sample_id="UNKNOWN_01")
+        self.assertEqual(lst["assessments"], [])
+        st, lst, _ = self.request("/api/signal")
+        self.assertNotIn("sources", lst["assessments"][0])
+        self.assertIn("n_pass", lst["assessments"][0])
+
+    def test_compare_two_assessments(self):
+        st, a, _ = self._create(name="C1")
+        st, b, _ = self._create(name="C2", window=30, step=15)
+        q = urlencode({"a": a["assessment_id"],
+                       "b": b["assessment_id"]})
+        st, cmp_, _ = self.request(f"/api/signal/compare?{q}")
+        self.assertEqual(st, 200, cmp_)
+        self.assertGreater(cmp_["n_common_windows"], 0)
+        self.assertIn("window", cmp_["param_diff"])
+        self.assertIn("eps_a", cmp_["windows"][0])
+
+    def test_download_report(self):
+        st, a, _ = self._create()
+        st, report, hdr = self.request(
+            f"/api/signal/{a['assessment_id']}/download")
+        self.assertEqual(st, 200)
+        self.assertIn("attachment", hdr["Content-Disposition"])
+        self.assertEqual(report["report_type"],
+                         "tree_ring_signal_strength")
+        self.assertEqual(len(report["sources"]), 5)
+        self.assertTrue(report["windows"])
+        json.dumps(report, allow_nan=False)
+        st, _, hdr = self.request(
+            f"/api/signal/{a['assessment_id']}/download", download=0)
+        self.assertNotIn("Content-Disposition", hdr)
+
+    def test_param_validation_and_missing_inputs(self):
+        st, body, _ = self.request("/api/signal", "POST", body={
+            "name": "BAD", "hypothesis": "H1", "window": 2, "step": 0,
+            "min_samples": 1, "eps_threshold": 2.0, "min_pair_years": 1})
+        self.assertEqual(st, 422)
+        codes = {e.get("param") for e in body["errors"]}
+        self.assertEqual(codes, {"window", "step", "min_samples",
+                                 "eps_threshold", "min_pair_years"})
+        st, body, _ = self.request("/api/signal", "POST",
+                                   body={"hypothesis": "H1"})
+        self.assertEqual(st, 400)
+        st, body, _ = self.request("/api/signal", "POST",
+                                   body={"name": "X"})
+        self.assertEqual(st, 400)
+        st, body, _ = self.request("/api/signal", "POST", body={
+            "name": "X", "hypothesis": "NOPE"})
+        self.assertEqual(st, 404)
+        st, body, _ = self._create(name="X", samples=["GHOST"])
+        self.assertEqual(st, 404)
+        st, _, _ = self._create(name="DUP")
+        st, body, _ = self._create(name="DUP")
+        self.assertEqual(st, 422)
+        self.assertEqual(body["errors"][0]["code"], "E_SIGNAL_EXISTS")
+
+    def test_crossdate_pins_signal_span(self):
+        st, a, _ = self._create()
+        st, ad, _ = self._adopt(a["assessment_id"])
+        lo = ad["reliable_span"]["start_year"]
+        hi = ad["reliable_span"]["end_year"]
+        st, cd, _ = self.request("/api/crossdate", "POST", body={
+            "sample_id": "SITE_C02", "hypothesis": "H1",
+            "offset_min": 1890, "offset_max": 2010, "min_overlap": 20,
+            "signal_id": a["assessment_id"]})
+        self.assertEqual(st, 200, cd)
+        for c in cd["candidates"]:
+            self.assertGreaterEqual(c["overlap_start"], lo)
+            self.assertLessEqual(c["overlap_end"], hi)
+
+    def test_help_openapi_and_root_advertise_signal(self):
+        st, help_, _ = self.request("/api/help")
+        paths = {e["path"] for e in help_["endpoints"]}
+        for p in ("/api/signal", "/api/signal/{id}",
+                  "/api/signal/{id}/adopt", "/api/signal/compare?a=&b=",
+                  "/api/signal/{id}/download"):
+            self.assertIn(p, paths)
+        st, spec, _ = self.request("/api/openapi.json")
+        for p in ("/api/signal", "/api/signal/{id}",
+                  "/api/signal/{id}/complete", "/api/signal/{id}/adopt",
+                  "/api/signal/{id}/retire", "/api/signal/compare",
+                  "/api/signal/{id}/download"):
+            self.assertIn(p, spec["paths"], p)
+        self.assertIn("SignalAssessment", spec["components"]["schemas"])
+        cd_params = {p["name"] for p in
+                     spec["paths"]["/api/crossdate"]["get"]["parameters"]}
+        self.assertIn("signal_id", cd_params)
+        import urllib.request
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{self.port}/") as resp:
+            html = resp.read().decode("utf-8")
+        self.assertIn("信号强度", html)
+        self.assertIn("/api/signal", html)
+
+
 class TestDocs(unittest.TestCase):
     def test_openapi_is_self_describing(self):
         from tree_ring_xdate.docs import OPENAPI, HTML_DOCS

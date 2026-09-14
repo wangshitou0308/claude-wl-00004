@@ -16,6 +16,10 @@ Modules:
     standardization -- per-sample detrending plans (mean / negative
                    exponential / centred moving average), versioned and
                    frozen at adoption for chronologies and jobs
+    signal       -- chronology signal-strength assessments (sample depth,
+                   pair correlation, Rbar, EPS, jackknife), frozen basis,
+                   draft|completed|adopted|retired lifecycle and a reliable
+                   interval that adopted chronologies/matches are pinned to
     server      -- http.server based HTTP API
     cli         -- command line entry point (``python -m tree_ring_xdate``)
 """

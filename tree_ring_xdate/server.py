@@ -16,8 +16,8 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import (analysis, corrections, db, stability, standardization,
-               validate)
+from . import (analysis, corrections, db, signal, stability,
+               standardization, validate)
 from .docs import OPENAPI, HTML_DOCS
 
 DEFAULT_HYPOTHESIS = "default"
@@ -172,6 +172,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(422, {"error": {"code": "STANDARDIZATION_REJECTED",
                                        "message": str(e)},
                              "errors": e.errors})
+        except signal.SignalError as e:
+            self._send(422, {"error": {"code": "SIGNAL_REJECTED",
+                                       "message": str(e)},
+                             "errors": e.errors})
         except KeyError as e:
             self._send(404, {"error": {"code": "NOT_FOUND",
                                       "message": str(e).strip("'")}})
@@ -275,6 +279,24 @@ class Handler(BaseHTTPRequestHandler):
             int(ver) if ver not in (None, "") else None,
             hypothesis=hypothesis)
 
+    def _signal(self, body, query, *, hypothesis=None):
+        """Resolve an adopted signal-strength assessment for a calculation.
+
+        Accepts signal_id (or signal_assessment) from either JSON body or
+        query string.  An adopted assessment restricts the reference to its
+        reliable interval; requests without a pin return None and keep
+        their old range.
+        """
+        raw_id = (body.get("signal_id") if isinstance(body, dict) else None)
+        if raw_id is None and isinstance(body, dict):
+            raw_id = body.get("signal_assessment")
+        if raw_id is None:
+            raw_id = query.get("signal_id") or query.get("signal_assessment")
+        if raw_id in (None, "", "none", "null"):
+            return None
+        return signal.resolve_adopted(self.conn, int(raw_id),
+                                      hypothesis=hypothesis)
+
     def ep_crossdate(self, query):
         body = self._json_body() if self.command == "POST" else {}
         sid = body.get("sample_id") or query.get("sample_id")
@@ -283,6 +305,7 @@ class Handler(BaseHTTPRequestHandler):
                            "sample_id is required")
         hypothesis = body.get("hypothesis", query.get("hypothesis"))
         std = self._std(body, query, hypothesis=hypothesis)
+        sig = self._signal(body, query, hypothesis=hypothesis)
         params = {
             "reference": body.get("reference",
                                   query.get("reference", "master")),
@@ -303,7 +326,8 @@ class Handler(BaseHTTPRequestHandler):
         if params["min_overlap"] < 3:
             raise ApiError(400, "BAD_REQUEST",
                            "min_overlap must be >= 3")
-        result = analysis.crossdate(self.conn, sid, std=std, **params)
+        result = analysis.crossdate(self.conn, sid, std=std, signal=sig,
+                                    **params)
         run_id = db.save_run(self.conn, sid, params["reference"],
                              result["params"], result["candidates"])
         result["run_id"] = run_id
@@ -384,12 +408,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_chronology(self, hypothesis, query):
         std = self._std({}, query, hypothesis=hypothesis)
+        sig = self._signal({}, query, hypothesis=hypothesis)
         chrono = analysis.build_chronology(
             self.conn, hypothesis,
             min_samples=int(query.get("min_samples", 3)),
             outlier_sd=float(query.get("outlier_sd", 2.0)),
             weak_correlation=float(query.get("weak_correlation", 0.3)),
-            std=std)
+            std=std, signal=sig)
         self._send(200, chrono)
 
     def ep_master(self, query):
@@ -401,8 +426,9 @@ class Handler(BaseHTTPRequestHandler):
             db.create_hypothesis(self.conn, hypothesis,
                                  "auto-created working hypothesis")
         std = self._std({}, query, hypothesis=hypothesis)
+        sig = self._signal({}, query, hypothesis=hypothesis)
         yw, meta = analysis.build_reference(self.conn, "master", hypothesis,
-                                            std=std)
+                                            std=std, signal=sig)
         self._send(200, {"meta": meta,
                          "years": [{"year": y, "index": yw[y]}
                                    for y in sorted(yw)]})
@@ -427,7 +453,8 @@ class Handler(BaseHTTPRequestHandler):
             min_samples=int(query.get("min_samples", 3)),
             outlier_sd=float(query.get("outlier_sd", 2.0)),
             weak_correlation=float(query.get("weak_correlation", 0.3)),
-            std=self._std({}, query, hypothesis=hyp_name))
+            std=self._std({}, query, hypothesis=hyp_name),
+            signal=self._signal({}, query, hypothesis=hyp_name))
         report = {
             "report_type": "tree_ring_crossdating",
             "generated_at": db.now_iso(),
@@ -626,6 +653,104 @@ class Handler(BaseHTTPRequestHandler):
                    download_name=(f"stability_{cid}.json"
                                   if download else None))
 
+    # -- signal-strength assessments ---------------------------------------
+    def ep_signal_create(self, query):
+        body = self._json_body()
+        name = body.get("name") or query.get("name")
+        if not name:
+            raise ApiError(400, "MISSING_PARAM", "name is required")
+        hypothesis = (body.get("hypothesis")
+                      or query.get("hypothesis"))
+        if not hypothesis:
+            raise ApiError(400, "MISSING_PARAM", "hypothesis is required")
+        samples = body.get("samples")
+        sample_ids = None
+        if isinstance(samples, list):
+            sample_ids = [s if isinstance(s, str) else s.get("sample_id")
+                          for s in samples]
+            sample_ids = [s for s in sample_ids if s]
+        elif isinstance(samples, str) and samples:
+            sample_ids = [samples]
+        std = self._std(body, query, hypothesis=hypothesis)
+        result = signal.create_assessment(
+            self.conn, name=name, hypothesis=hypothesis,
+            sample_ids=sample_ids,
+            window=int(body.get("window", query.get("window", 50))),
+            step=int(body.get("step", query.get("step", 25))),
+            min_samples=int(body.get("min_samples",
+                                     query.get("min_samples", 3))),
+            eps_threshold=float(body.get(
+                "eps_threshold", query.get("eps_threshold", 0.85))),
+            min_pair_years=int(body.get(
+                "min_pair_years", query.get("min_pair_years", 5))),
+            note=body.get("note", ""), std=std)
+        self._send(201, result)
+
+    def ep_signal_list(self, query):
+        self._send(200, {"assessments": db.list_signal_assessments(
+            self.conn, hypothesis=query.get("hypothesis"),
+            status=query.get("status"), sample_id=query.get("sample_id"))})
+
+    def _signal_head(self, aid):
+        row = db.get_signal_assessment(self.conn, int(aid))
+        if row is None:
+            raise ApiError(404, "NOT_FOUND",
+                           f"signal assessment not found: {aid}")
+        return row
+
+    def ep_signal_get(self, query, aid):
+        self._signal_head(aid)
+        filters = {}
+        for k in ("year_from", "year_to"):
+            v = query.get(k)
+            if v not in (None, ""):
+                filters[k] = int(v)
+        if query.get("status"):
+            filters["status"] = query["status"]
+        if "eps_pass" in query and query["eps_pass"] != "":
+            filters["eps_pass"] = query["eps_pass"].lower() in (
+                "1", "true", "yes")
+        if query.get("sample_id"):
+            filters["sample_id"] = query["sample_id"]
+        self._send(200, signal.assessment_detail(self.conn, int(aid),
+                                                 filters=filters))
+
+    def ep_signal_complete(self, query, aid):
+        self._signal_head(aid)
+        self._send(200, signal.complete_assessment(self.conn, int(aid)))
+
+    def ep_signal_adopt(self, query, aid):
+        self._signal_head(aid)
+        body = self._json_body() if self.command == "POST" else {}
+        chosen = body.get("windows", query.get("windows"))
+        windows = None
+        if chosen not in (None, "", []):
+            if isinstance(chosen, str):
+                chosen = [p for p in chosen.split(",") if p != ""]
+            windows = [int(p) for p in chosen]
+        self._send(200, signal.adopt_assessment(
+            self.conn, int(aid), windows=windows))
+
+    def ep_signal_retire(self, query, aid):
+        self._signal_head(aid)
+        self._send(200, signal.retire_assessment(self.conn, int(aid)))
+
+    def ep_signal_compare(self, query):
+        a, b = query.get("a"), query.get("b")
+        if not a or not b:
+            raise ApiError(400, "MISSING_PARAM",
+                           "query parameters 'a' and 'b' (assessment ids) "
+                           "are required")
+        self._send(200, signal.compare_assessments(
+            self.conn, int(a), int(b)))
+
+    def ep_signal_download(self, query, aid):
+        report = signal.assessment_report(self.conn, int(aid))
+        download = query.get("download", "1").lower() in ("1", "true")
+        self._send(200, report,
+                   download_name=(f"signal_{aid}.json"
+                                  if download else None))
+
     # -- standardization plans ---------------------------------------------
     def ep_std_create(self, query):
         body = self._json_body()
@@ -813,6 +938,14 @@ _ROUTES = [
     ({"GET"},    "/api/stability/compare",             Handler.ep_stability_compare),
     ({"GET"},    "/api/stability/{cid}",               Handler.ep_stability_get),
     ({"GET"},    "/api/stability/{cid}/download",      Handler.ep_stability_download),
+    ({"POST"},   "/api/signal",                        Handler.ep_signal_create),
+    ({"GET"},    "/api/signal",                        Handler.ep_signal_list),
+    ({"GET"},    "/api/signal/compare",                Handler.ep_signal_compare),
+    ({"GET"},    "/api/signal/{aid}",                  Handler.ep_signal_get),
+    ({"POST"},   "/api/signal/{aid}/complete",         Handler.ep_signal_complete),
+    ({"POST"},   "/api/signal/{aid}/adopt",            Handler.ep_signal_adopt),
+    ({"POST"},   "/api/signal/{aid}/retire",           Handler.ep_signal_retire),
+    ({"GET"},    "/api/signal/{aid}/download",         Handler.ep_signal_download),
     ({"POST"},   "/api/standardizations",              Handler.ep_std_create),
     ({"GET"},    "/api/standardizations",              Handler.ep_std_list),
     ({"GET"},    "/api/standardizations/{sid}",        Handler.ep_std_get),
@@ -886,6 +1019,24 @@ _ENDPOINT_HELP = [
      "description": "比较两次检查：参数差异、共有窗口 best_shift 变化、疑似错位标记的新增与消失"},
     {"method": "GET", "path": "/api/stability/{id}/download",
      "description": "检查完整 JSON 导出（参数、样本映射、参照快照、全部窗口与标记；?download=0 取消附件头）"},
+    {"method": "POST", "path": "/api/signal",
+     "description": "创建年表信号强度评估（draft，冻结定年假设、可选已采用标准化版本、样本集合与窗口参数）：按共同年份在各窗口计算样本深度、样本对 Pearson、Rbar 与 EPS=N·R̄/(N·R̄+1−R̄)，列出参与样本、有效配对数及公式输入；再逐样本剔除重算 Rbar/EPS 差值（jackknife，仅提示，不自动排除任何序列）。覆盖不足、无有效配对或 EPS 无法计算的窗口只返回依据（insufficient_coverage/no_valid_pairs/eps_incalculable）"},
+    {"method": "GET", "path": "/api/signal",
+     "description": "列出评估作业（可按 hypothesis、status、sample_id 过滤）"},
+    {"method": "GET", "path": "/api/signal/{id}",
+     "description": "评估详情：逐窗深度/Rbar/EPS、样本对明细与 jackknife 差值；支持 ?year_from=&year_to=&status=&eps_pass=&sample_id= 筛选；来源假设/校正/标准化版本变化只标记 source_status stale，不重算"},
+    {"method": "POST", "path": "/api/signal/{id}/complete",
+     "description": "完成评估（draft→completed）；冻结证据不变"},
+    {"method": "POST", "path": "/api/signal/{id}/adopt",
+     "description": "采用连续的 EPS 达标窗口为可靠区间（completed→adopted；body/query windows 指定连续窗口下标，缺省取最长连续达标段；未达 eps_threshold 的区间不得采用，无达标窗口 422）"},
+    {"method": "POST", "path": "/api/signal/{id}/retire",
+     "description": "停用评估（adopted/completed→retired；旧作业保持原范围不受影响）"},
+    {"method": "GET", "path": "/api/signal/compare?a=&b=",
+     "description": "比较两次评估：参数差异、共有窗口 Rbar/EPS 与达标变化、可靠区间差异"},
+    {"method": "GET", "path": "/api/signal/{id}/download",
+     "description": "评估完整 JSON 导出（冻结来源映射、逐窗统计与采用范围；?download=0 取消附件头）"},
+    {"method": "GET/POST", "path": "/api/master、/api/crossdate 与年表",
+     "description": "可带 signal_id（别名 signal_assessment）指定已采用评估版本，参照只取其冻结成员指数并限制在可靠区间内；旧作业/不传时保持原范围与原口径"},
     {"method": "POST", "path": "/api/standardizations",
      "description": "创建序列标准化方案（draft 版本1）：以 {samples:[{sample_id,method,parameters}]} 逐样本选择水平均值 mean、负指数曲线 negative_exponential 或固定窗口居中移动平均 moving_average（window 为>=3 奇数）；方案从指定 hypothesis 的采用映射读取年份与校正版本；缺失环保留零宽、伪环不参与拟合"},
     {"method": "GET", "path": "/api/standardizations",

@@ -39,6 +39,10 @@ OPENAPI = json.loads(r"""
       "description": "已定年结果的局部稳定性检查"
     },
     {
+      "name": "signal",
+      "description": "年表信号强度评估（样本深度 / Rbar / EPS、可靠区间与状态流转）"
+    },
+    {
       "name": "chronology",
       "description": "主年表与统计"
     }
@@ -266,6 +270,15 @@ OPENAPI = json.loads(r"""
               "type": "integer"
             },
             "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
+          },
+          {
+            "name": "signal_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用信号强度评估 id（别名 signal_assessment）；指定后参照取其冻结成员指数并限制在可靠区间内，旧作业不受影响"
           }
         ],
         "responses": {
@@ -296,6 +309,10 @@ OPENAPI = json.loads(r"""
                   "standardization_version": {
                     "type": "integer",
                     "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
+                  },
+                  "signal_id": {
+                    "type": "integer",
+                    "description": "已采用信号强度评估 id（别名 signal_assessment）；指定后参照取其冻结成员指数并限制在可靠区间内，运行结果记录该评估版本（body 字段，别名 signal_assessment）"
                   }
                 }
               }
@@ -836,6 +853,332 @@ OPENAPI = json.loads(r"""
         }
       }
     },
+    "/api/signal": {
+      "post": {
+        "tags": [
+          "signal"
+        ],
+        "summary": "创建年表信号强度评估（draft）：冻结定年假设、可选标准化版本、样本集合与窗口参数，逐窗计算深度/Rbar/EPS 与逐样本剔除差值",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignalAssessment"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "评估完成（逐窗样本深度、样本对相关、Rbar、EPS、jackknife 差值与公式输入）"
+          },
+          "404": {
+            "description": "假设或样本不存在"
+          },
+          "409": {
+            "description": "同名评估已存在（E_SIGNAL_EXISTS）"
+          },
+          "422": {
+            "description": "参数越界（E_PARAM）、假设内无样本（E_NO_MEMBERS）、无可冻结成员（E_NO_ASSESSABLE_MEMBERS）或标准化方案未覆盖某样本（E_STD_NOT_COVERED）"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "signal"
+        ],
+        "summary": "列出评估作业（?hypothesis=&status=&sample_id= 过滤）",
+        "parameters": [
+          {
+            "name": "hypothesis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "completed",
+                "adopted",
+                "retired"
+              ]
+            }
+          },
+          {
+            "name": "sample_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "只返回冻结成员包含该样本的评估"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "评估列表（不含逐窗明细）"
+          }
+        }
+      }
+    },
+    "/api/signal/{id}": {
+      "get": {
+        "tags": [
+          "signal"
+        ],
+        "summary": "评估详情；窗口可按年份/状态/EPS 达标/成员筛选；来源变化只标记 stale 不重算",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "year_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "year_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "insufficient_coverage",
+                "no_valid_pairs",
+                "eps_incalculable"
+              ]
+            }
+          },
+          {
+            "name": "eps_pass",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "0",
+                "1"
+              ]
+            },
+            "description": "只保留 EPS 达标/未达标窗口"
+          },
+          {
+            "name": "sample_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "评估详情（windows/source_status/reliable_span）"
+          },
+          "404": {
+            "description": "评估不存在"
+          }
+        }
+      }
+    },
+    "/api/signal/{id}/complete": {
+      "post": {
+        "tags": [
+          "signal"
+        ],
+        "summary": "完成评估（draft→completed），冻结证据不变",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "评估详情（status=completed）"
+          },
+          "404": {
+            "description": "评估不存在"
+          },
+          "422": {
+            "description": "评估已采用（E_SIGNAL_ALREADY_ADOPTED）或已停用（E_SIGNAL_RETIRED）"
+          }
+        }
+      }
+    },
+    "/api/signal/{id}/adopt": {
+      "post": {
+        "tags": [
+          "signal"
+        ],
+        "summary": "采用连续 EPS 达标窗口为可靠区间（completed→adopted）；未达阈值的区间不得采用",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "windows": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "description": "相邻且全部达标的窗口下标；缺省取最长连续达标段"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已采用（reliable_span 给出窗口下标与年份范围）"
+          },
+          "404": {
+            "description": "评估不存在"
+          },
+          "422": {
+            "description": "仍是 draft（E_SIGNAL_DRAFT）、无达标窗口（E_NO_RELIABLE_RANGE）、含未达标窗口（E_WINDOW_BELOW_THRESHOLD）或窗口不相邻（E_WINDOWS_NOT_CONSECUTIVE）"
+          }
+        }
+      }
+    },
+    "/api/signal/{id}/retire": {
+      "post": {
+        "tags": [
+          "signal"
+        ],
+        "summary": "停用评估（completed/adopted→retired）；旧作业保持原范围",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已停用"
+          },
+          "404": {
+            "description": "评估不存在"
+          },
+          "422": {
+            "description": "评估已是 retired（E_SIGNAL_RETIRED）"
+          }
+        }
+      }
+    },
+    "/api/signal/compare": {
+      "get": {
+        "tags": [
+          "signal"
+        ],
+        "summary": "比较两次评估：参数差异、共有窗口 Rbar/EPS 与达标变化、可靠区间差异（?a=&b=）",
+        "parameters": [
+          {
+            "name": "a",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "b",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "两次评估的差异"
+          },
+          "404": {
+            "description": "任一评估不存在"
+          }
+        }
+      }
+    },
+    "/api/signal/{id}/download": {
+      "get": {
+        "tags": [
+          "signal"
+        ],
+        "summary": "评估完整 JSON 导出（冻结来源映射、逐窗统计与采用范围；?download=0 取消附件头）",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "download",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON 报告（Content-Disposition 附件）"
+          },
+          "404": {
+            "description": "评估不存在"
+          }
+        }
+      }
+    },
     "/api/hypotheses": {
       "get": {
         "tags": [
@@ -1058,6 +1401,15 @@ OPENAPI = json.loads(r"""
               "type": "integer"
             },
             "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
+          },
+          {
+            "name": "signal_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用信号强度评估 id（别名 signal_assessment）；指定后年表取该评估冻结成员指数并只覆盖可靠区间，旧作业保持原范围"
           }
         ],
         "responses": {
@@ -1185,6 +1537,15 @@ OPENAPI = json.loads(r"""
               "type": "integer"
             },
             "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
+          },
+          {
+            "name": "signal_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用信号强度评估 id（别名 signal_assessment）；指定后主年表取该评估冻结成员指数并只覆盖可靠区间，旧作业保持原范围"
           }
         ],
         "responses": {
@@ -1226,6 +1587,15 @@ OPENAPI = json.loads(r"""
               "type": "integer"
             },
             "description": "已采用版本号（缺省取方案当前 adopted_version）；不传 standardization_id 时保持原原始宽度口径"
+          },
+          {
+            "name": "signal_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "已采用信号强度评估 id（别名 signal_assessment）；指定后年表取该评估冻结成员指数并只覆盖可靠区间，旧作业保持原范围"
           }
         ],
         "responses": {
@@ -1844,6 +2214,67 @@ OPENAPI = json.loads(r"""
           "hypothesis"
         ]
       },
+      "SignalAssessment": {
+        "type": "object",
+        "description": "年表信号强度评估请求。创建即冻结定年假设、可选已采用标准化版本、样本集合与窗口参数；逐窗在成员共同年份上计算样本深度、样本对 Pearson、Rbar（有效配对相关的均值，配对需至少 min_pair_years 个共同年份且双方非零方差）与 EPS=N·R̄/(N·R̄+1−R̄)（N 为窗口平均样本深度），列出参与样本、有效配对数与全部公式输入；再逐个剔除样本重算 Rbar/EPS 差值（jackknife，仅提示，绝不自动排除任何序列）。覆盖不足、无有效配对或 EPS 无法计算的窗口只返回依据（insufficient_coverage/no_valid_pairs/eps_incalculable）。作业按 draft→completed→adopted→retired 流转：只有 completed 才能 adopt，采用连续 EPS 达标窗口作为可靠区间；来源假设/校正/标准化版本变化只把旧评估标记为 stale，不重算。",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "评估唯一名（必填）"
+          },
+          "hypothesis": {
+            "type": "string",
+            "description": "提供年份映射的定年假设（必填）"
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "样本编号集合；缺省取假设内全部已锁定/已校正样本"
+          },
+          "window": {
+            "type": "integer",
+            "default": 50,
+            "description": "窗口长度（年，>=5）"
+          },
+          "step": {
+            "type": "integer",
+            "default": 25,
+            "description": "相邻窗口起点步长（年，>=1）"
+          },
+          "min_samples": {
+            "type": "integer",
+            "default": 3,
+            "description": "窗口平均样本深度至少达到的样本数（>=2），不足标记 insufficient_coverage"
+          },
+          "eps_threshold": {
+            "type": "number",
+            "default": 0.85,
+            "description": "EPS 达标阈值（严格介于 0..1，常用 0.85）"
+          },
+          "min_pair_years": {
+            "type": "integer",
+            "default": 5,
+            "description": "样本对有效所需的最少共同年份（>=3）"
+          },
+          "note": {
+            "type": "string"
+          },
+          "standardization_id": {
+            "type": "integer",
+            "description": "已采用标准化方案 id（别名 standardization）；指定后成员指数取自该版本冻结轮宽指数，样本必须全部被该方案覆盖"
+          },
+          "standardization_version": {
+            "type": "integer",
+            "description": "已采用版本号（缺省取方案当前 adopted_version）"
+          }
+        },
+        "required": [
+          "name",
+          "hypothesis"
+        ]
+      },
       "StdSampleChoice": {
         "type": "object",
         "description": "一个样本的去趋势选择。method=mean 水平均值（无需参数）；negative_exponential 负指数曲线 a0*exp(b*(year-origin_year))+d（b<=0，阻尼 Gauss-Newton 拟合，不收敛返回 E_EXP_NOT_CONVERGED 且不更换算法）；moving_average 固定窗口居中移动平均，parameters.window 必须为 >=3 的奇数，窗口内有效点不足 3 个时返回 E_WINDOW_TOO_SHORT 并定位 seq。缺失环保留零宽（指数记 0），伪环不分配日历年、不参与拟合。",
@@ -2227,7 +2658,55 @@ leave-one-out 相关低于 weak_correlation（默认 0.3）。</li>
 <code>{"standardization_id":1}</code>。不传时保持原原始宽度/样本均值口径，<b>旧作业仍保留其计算依据</b>。
 来源映射之后若变化，详情中的 <code>source_status</code> 只给 stale 说明，已冻结指数不变。</p>
 
-<h2>9. 报告与主年表</h2>
+<h2>9. 年表信号强度评估（Rbar / EPS） <span class="tag">POST /api/signal</span></h2>
+<p>年表的<b>群体信号</b>够不够强？评估在创建瞬间<b>冻结计算依据</b>：定年假设、可选的已采用标准化版本、
+<b>样本集合</b>与窗口参数，以及每个成员样本按当时年份映射算出的无量纲指数（原始口径为
+宽度/正宽均值；标准化口径直接取方案冻结指数）。之后锁定、校正或标准化版本变化，只把旧评估标记为
+<code>source_status.stale</code>，<b>绝不重算</b>已保存的统计。</p>
+<pre>curl -X POST localhost:8000/api/signal -d '{
+  "name":"EPS-2026","hypothesis":"H1",
+  "samples":["SITE_A01","SITE_A02","SITE_B01","SITE_B02","SITE_C01"],
+  "window":50,"step":25,"min_samples":3,
+  "eps_threshold":0.85,"min_pair_years":5}'</pre>
+<p>在每个窗口内按成员<b>共同年份</b>给出：</p>
+<table>
+<tr><th>量</th><th>含义</th></tr>
+<tr><td>样本深度 depth</td><td>逐年覆盖样本数，窗口给出 max_depth、mean_depth 与逐年 depth_inputs</td></tr>
+<tr><td>样本对相关</td><td>每对成员在共同年份上的 Pearson；共同年份 &lt; min_pair_years 或任一方零方差时
+记为<b>无效配对</b>并说明原因（相关仍作为依据列出，但不喂给 Rbar）</td></tr>
+<tr><td>Rbar（R̄）</td><td>有效配对相关的算术平均（n_valid_pairs 个）</td></tr>
+<tr><td>EPS</td><td><code>N·R̄ / (N·R̄ + 1 − R̄)</code>，N 为窗口平均样本深度；分母非正时 eps_incalculable</td></tr></table>
+<div class="note"><b>只给依据、不自动排除</b>：覆盖不足（平均深度不足 min_samples）标记
+<code>insufficient_coverage</code>、无有效配对 <code>no_valid_pairs</code>、EPS 无法计算
+<code>eps_incalculable</code>——这些窗口<b>不下 Rbar/EPS 结论</b>，只返回参与样本、配对明细与深度输入。
+每个达标窗口还做 <b>jackknife</b>：逐个剔除样本重算 Rbar、EPS 与差值（<code>jackknife[].eps_delta</code>），
+差值仅供参考，<b>没有任何序列会被自动剔除</b>。</div>
+<p>状态在 <code>draft → completed → adopted → retired</code> 间流转（也可直接停用）：</p>
+<table>
+<tr><th>操作</th><th>请求</th></tr>
+<tr><td>创建评估（draft）</td><td>POST /api/signal（body 见上；samples 可省略=假设内全部已定年样本）</td></tr>
+<tr><td>完成</td><td>POST /api/signal/1/complete（draft→completed，冻结证据不变）</td></tr>
+<tr><td>采用可靠区间</td><td>POST /api/signal/1/adopt（completed→adopted）</td></tr>
+<tr><td>停用</td><td>POST /api/signal/1/retire</td></tr>
+<tr><td>列表/筛选</td><td>GET /api/signal?hypothesis=H1&amp;status=adopted&amp;sample_id=SITE_A01</td></tr>
+<tr><td>详情/窗口筛选</td><td>GET /api/signal/1?year_from=1960&amp;year_to=2000&amp;eps_pass=1&amp;status=ok&amp;sample_id=SITE_A01</td></tr>
+<tr><td>两次评估比较</td><td>GET /api/signal/compare?a=1&amp;b=2</td></tr>
+<tr><td>JSON 下载</td><td>GET /api/signal/1/download（?download=0 取消附件头）</td></tr></table>
+<p><b>可靠区间只能是连续达标的窗口</b>：adopt 时可在 body 给
+<code>{"windows":[2,3,4]}</code> 指定<b>相邻且全部达标</b>的窗口下标；缺省取最长连续达标段，自动给出
+<code>reliable_span</code>（窗口下标 + 起止日历年）。未达 <code>eps_threshold</code> 的窗口永远不得采用
+（<code>E_WINDOW_BELOW_THRESHOLD</code>）；不存在任何达标窗口时 422（<code>E_NO_RELIABLE_RANGE</code>）。
+仍是 draft 不能采用（<code>E_SIGNAL_DRAFT</code>，先 complete）。</p>
+<p><b>已采用评估限制下游参照</b>：主年表、滑动匹配（及年表/报告）可带
+<code>signal_id</code>（别名 <code>signal_assessment</code>）指定一个 adopted 评估版本——参照只取该评估的
+<b>冻结成员指数</b>并把年份限制在 <code>reliable_span</code> 内，候选的重叠区间不会越出可靠范围；
+不传时保持原范围与原口径，<b>旧作业保持其原范围</b>（runs 表持久化 signal_id/version；评估停用后
+旧运行记录不变，只是不能再新挂该评估）。</p>
+<pre>curl 'localhost:8000/api/master?hypothesis=H1&amp;signal_id=1'
+curl -X POST localhost:8000/api/crossdate -d '{"sample_id":"SITE_C02",
+  "hypothesis":"H1","signal_id":1,"offset_min":1935,"offset_max":1945}'</pre>
+
+<h2>10. 报告与主年表</h2>
 <table>
 <tr><td>下载 JSON 报告</td>
 <td>GET /api/hypotheses/H1/report?download=1</td></tr>
@@ -2236,7 +2715,7 @@ leave-one-out 相关低于 weak_correlation（默认 0.3）。</li>
 <tr><td>标准化主年表</td><td>GET /api/master?hypothesis=H1&amp;standardization_id=1</td></tr>
 <tr><td>历史滑动结果</td><td>GET /api/runs</td></tr></table>
 
-<h2>10. cURL 速览</h2>
+<h2>11. cURL 速览</h2>
 <pre>curl -X POST localhost:8000/api/series \\
   -H 'Content-Type: text/csv' --data-binary @examples/samples.csv
 curl -X POST localhost:8000/api/hypotheses -d '{"name":"H1"}'
@@ -2258,6 +2737,13 @@ curl -X POST localhost:8000/api/stability \\
   -d '{"hypothesis":"H1","sample_id":"UNKNOWN_01","standardization_id":1,
        "window":30,"step":10,"run_threshold":3,"search_radius":3}'
 curl 'localhost:8000/api/master?hypothesis=H1&amp;standardization_id=1'
+curl -X POST localhost:8000/api/signal \\
+  -d '{"name":"EPS-2026","hypothesis":"H1","window":50,"step":25,
+       "min_samples":3,"eps_threshold":0.85}'
+curl -X POST localhost:8000/api/signal/1/complete
+curl -X POST localhost:8000/api/signal/1/adopt
+curl 'localhost:8000/api/master?hypothesis=H1&amp;signal_id=1'
+curl 'localhost:8000/api/signal/compare?a=1&amp;b=2'
 curl 'localhost:8000/api/stability/1?shift=-2&amp;status=ok'
 curl 'localhost:8000/api/stability/compare?a=1&amp;b=2'
 curl 'localhost:8000/api/hypotheses/H1/report?download=1' -o report.json</pre>
